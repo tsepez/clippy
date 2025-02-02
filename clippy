@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+
+import argparse
+import json
+import os
+import openai  # Import the openai library
+
+# Configuration file location (in user's home directory)
+CONFIG_DIR = os.path.expanduser("~/.clippy")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+
+def load_config():
+    """Loads configuration from the config file."""
+    if not os.path.exists(CONFIG_FILE):
+        return {}
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_config(config):
+    """Saves configuration to the config file."""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=4)
+
+def set_model(args):
+    """Sets the OpenAI model and API key."""
+    model_api_key = args.model_api.split(":", 1)
+    if len(model_api_key) != 2:
+        print("Error: Invalid model and API key format. Use <model_name>:<api_key>")
+        return
+
+    model_name, api_key = model_api_key
+    config = load_config()
+    config['model_name'] = model_name # Store just the OpenAI model name, e.g., "gpt-4o" or "gpt-3.5-turbo"
+    config['api_key'] = api_key
+    save_config(config)
+    print(f"Model set to '{model_name}' and API key saved.")
+
+def get_base_url(model_name):
+    """
+    Determines the base URL for the OpenAI client based on the model name.
+    """
+    if model_name.startswith("gpt-"): # OpenAI models (e.g., gpt-4o, gpt-3.5-turbo)
+        return None # No base_url needed for official OpenAI API
+    elif model_name.startswith("gemini-"): # Google models (using OpenAI compatible endpoint)
+        return "https://generativelanguage.googleapis.com/v1beta/openai/"
+    elif model_name.startswith("claude-"): # Anthropic models (assuming they might use a different base URL if accessed via OpenAI endpoint - adjust if needed)
+      return "https://api.anthropic.com/"
+    else:
+        print(f"Warning: Unknown model prefix for '{model_name}'. Assuming OpenAI compatible API.")
+        return None # Default to OpenAI base URL or no base_url if model prefix is not recognized
+
+def ask_ai(prompt, model_name, api_key):
+    """
+    Interacts with the AI API, supporting different providers.
+    """
+    print(f"Sending prompt to model '{model_name}'...")
+
+    base_url = get_base_url(model_name) # Get the base URL based on the model name
+
+    client = openai.OpenAI(
+        api_key=api_key,
+        base_url=base_url # base_url will be None for OpenAI, or set for Google/Anthropic
+    )
+
+    messages = [
+        {"role": "user", "content": prompt} # Simple user message. You can expand this for system messages etc.
+    ]
+
+    try:
+        response = client.chat.completions.create( # Use openai.chat.completions.create for chat models
+            model=model_name,
+            messages=messages,
+            # Add other parameters as needed, e.g., temperature, max_tokens, etc.
+        )
+
+        # --- Parse OpenAI Response ---
+        if response.choices:
+            ai_answer = response.choices[0].message.content
+            return ai_answer
+        else:
+            return "No valid answer received from API."
+
+    except openai.APIError as e: # Catch OpenAI API errors
+        print(f"Error communicating with API: {e}")
+        return None
+    except Exception as e: # Catch other potential exceptions
+        print(f"An unexpected error occurred: {e}")
+        return None
+
+
+def ask(args):
+    """Asks a question to the AI model."""
+    config = load_config()
+    model_name = config.get('model_name')
+    api_key = config.get('api_key') # API key is loaded and used to set openai.api_key
+
+    if not model_name or not api_key: # API key is now required
+        print("Error: Model and API key not set. Please use 'clippy set_model <model_name>:<api_key>' first.")
+        return
+
+    prompt = " ".join(args.prompt)
+    if not prompt:
+        print("Error: Please provide a prompt to ask.")
+        return
+
+    ai_response = ask_ai(prompt, model_name, api_key)
+    if ai_response:
+        print("\nAI Response:\n")
+        print(ai_response.strip()) # Remove leading/trailing whitespace for cleaner output
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Clippy: Your AI Command-Line Assistant (OpenAI, Google, Anthropic)") # Updated description
+    subparsers = parser.add_subparsers(title='commands', dest='command')
+
+    # set_model command
+    set_model_parser = subparsers.add_parser('set_model', help='Set the AI model and API key (e.g., gpt-4o:your_openai_api_key or gemini-pro:your_google_api_key)') # Updated help text
+    set_model_parser.add_argument('model_api', help='Model name and API key in the format <model_name>:<api_key>')
+    set_model_parser.set_defaults(func=set_model)
+
+    # ask command
+    ask_parser = subparsers.add_parser('ask', help='Ask a question to the AI model') # Updated help text
+    ask_parser.add_argument('prompt', nargs='+', help='The prompt to ask the AI. Use quotes for multi-word prompts.')
+    ask_parser.set_defaults(func=ask)
+
+    args = parser.parse_args()
+
+    if args.command:
+        args.func(args)
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    main()
