@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import openai  # Import the openai library
+import sys # Import the sys module
 
 # Configuration file location (in user's home directory)
 CONFIG_DIR = os.path.expanduser("~/.clippy")
@@ -102,9 +103,18 @@ def ask(args):
         print("Error: Model and API key not set. Please use 'clippy set_model <model_name>:<api_key>' first.")
         return
 
-    prompt = " ".join(args.prompt)
-    if not prompt:
-        print("Error: Please provide a prompt to ask.")
+    prompt_parts = args.prompt
+    stdin_content = ""
+
+    if not sys.stdin.isatty(): # Check if stdin is not a terminal (i.e., data is being piped in)
+        stdin_content = sys.stdin.read()
+        if stdin_content:
+            prompt_parts.append(stdin_content) # Append stdin content to the prompt
+
+    prompt = " ".join(prompt_parts) # Join all parts of the prompt
+
+    if not prompt.strip(): # Check if prompt is empty after potentially adding stdin
+        print("Error: Please provide a prompt to ask, either as command line arguments or via stdin.")
         return
 
     ai_response = ask_ai(prompt, model_name, api_key)
@@ -123,8 +133,8 @@ def main():
     set_model_parser.set_defaults(func=set_model)
 
     # ask command
-    ask_parser = subparsers.add_parser('ask', help='Ask a question to the AI model') # Updated help text
-    ask_parser.add_argument('prompt', nargs='+', help='The prompt to ask the AI. Use quotes for multi-word prompts.')
+    ask_parser = subparsers.add_parser('ask', help='Ask a question to the AI model. You can pipe input from stdin.') # Updated help text
+    ask_parser.add_argument('prompt', nargs='+', help='The prompt to ask the AI. Use quotes for multi-word prompts. You can also pipe data via stdin.')
     ask_parser.set_defaults(func=ask)
 
     args = parser.parse_args()
