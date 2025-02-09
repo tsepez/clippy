@@ -48,6 +48,33 @@ clippy set_model <model_name>:<your_api_key>
 
 ### Example
 
+```
 $ clippy set_model gemini-2.0-flash-thinking-exp-01-21:<gemini-api-key>
-$ clippy ask "what is the capital of France?"
-$ cat cyrpto_math.py | clippy ask "Explain the content of this file to me. File content:"
+$ clippy ask "what is the capital of France?"`
+Sending prompt to model 'gemini-2.0-flash-thinking-exp-01-21'...
+
+AI Response:
+
+The capital of France is **Paris**.
+```
+
+If you install the yek utility (https://github.com/bodo-run/yek), then you can
+do the following:
+
+```
+$ git clone https://github.com/karpathy/cryptos
+$ yek cryptos/ | clippy ask "Give me a high level overview of this project"
+Sending prompt to model 'gemini-2.0-flash-thinking-exp-01-21'...
+
+AI Response:
+
+Okay, let's break down this `cryptos` project based on the provided README and code snippets.  Here's a high-level overview:
+
+This project is a **pure Python implementation of Bitcoin**, designed for **educational purposes**.  It's built from scratch with **zero dependencies**, meaning it doesn't rely on any external libraries. The primary goal is to demonstrate and understand the inner workings of Bitcoin and its underlying cryptographic primitives.
+
+Here's a feature-by-feature breakdown:
+*   **Core Crypto Primitives:**
+    *   **SHA-256:**  A fundamental cryptographic hash function used extensively in Bitcoin. The project includes a pure Python implementation (`cryptos/sha256.py`) that closely follows the NIST specification.  It's explicitly stated as being slow and for educational use only, showcasing how SHA-256 works at a code level.  Example usage is provided comparing its output to `shasum`.
+    *   **RIPEMD-160:** Another hash function, used in Bitcoin addresses. While SHA-256 is implemented from scratch, RIPEMD-160 (`cryptos/ripemd160.py`) reuses an existing Python implementation with some cleanups, likely due to its greater complexity.
+    ....
+```
