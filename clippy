@@ -54,7 +54,8 @@ def get_base_url(model_name):
         print(f"Warning: Unknown model prefix for '{model_name}'. Assuming OpenAI compatible API.")
         return None # Default to OpenAI base URL or no base_url if model prefix is not recognized
 
-def ask_ai(prompt, model_name, api_key):
+
+def ask_ai(prompt, model_name, api_key, system_prompt=None):
     """
     Interacts with the AI API, supporting different providers.
     """
@@ -67,9 +68,10 @@ def ask_ai(prompt, model_name, api_key):
         base_url=base_url # base_url will be None for OpenAI, or set for Google/Anthropic
     )
 
-    messages = [
-        {"role": "user", "content": prompt} # Simple user message. You can expand this for system messages etc.
-    ]
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt}) # Simple user message. You can expand this for system messages etc.
 
     try:
         response = client.chat.completions.create( # Use openai.chat.completions.create for chat models
@@ -91,6 +93,23 @@ def ask_ai(prompt, model_name, api_key):
     except Exception as e: # Catch other potential exceptions
         print(f"An unexpected error occurred: {e}")
         return None
+
+
+_SYSTEM_PROMPT = """
+You are a helpful command-line assistant.  Please provide concise and well-formatted responses that are easy to read in a terminal.
+
+Specifically:
+
+- **Be brief and to the point.** Avoid unnecessary conversational fluff or lengthy explanations unless specifically asked for.
+- **Format for readability in a terminal.** Use simple formatting like:
+    - **Bold text** using markdown syntax `**bold text**` for emphasis where helpful.
+    - **Lists** using markdown list syntax (`- item` or `1. item`) for itemized information.
+    - **Code blocks** using markdown code block syntax (``` ```) to present code or commands clearly.
+- **Keep lines reasonably short.**  Avoid extremely long lines that might wrap awkwardly in terminals with limited width.
+- **Focus on providing the requested information directly.**  Assume the user is looking for quick, actionable answers.
+
+Your goal is to be a helpful and efficient assistant that provides clear, concise, and well-formatted information suitable for a command-line environment.
+"""
 
 
 def ask(args):
@@ -117,7 +136,8 @@ def ask(args):
         print("Error: Please provide a prompt to ask, either as command line arguments or via stdin.")
         return
 
-    ai_response = ask_ai(prompt, model_name, api_key)
+    ai_response = ask_ai(prompt, model_name, api_key,
+                         system_prompt=_SYSTEM_PROMPT)
     if ai_response:
         print("\nAI Response:\n")
         print(ai_response.strip()) # Remove leading/trailing whitespace for cleaner output
