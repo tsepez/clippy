@@ -44,11 +44,12 @@ Before you can start asking questions, you need to configure Clippy with your de
 
 ```bash
 clippy set_model <model_name>:<your_api_key>
+```
 
 
 ### Example
 
-```
+```bash
 $ clippy set_model gemini-2.0-flash-thinking-exp-01-21:<gemini-api-key>
 $ clippy ask "what is the capital of France?"`
 Sending prompt to model 'gemini-2.0-flash-thinking-exp-01-21'...
@@ -61,7 +62,7 @@ The capital of France is **Paris**.
 If you install the yek utility (https://github.com/bodo-run/yek), then you can
 do the following:
 
-```
+```bash
 $ git clone https://github.com/karpathy/cryptos
 $ yek cryptos/ | clippy ask "Give me a high level overview of this project"
 Sending prompt to model 'gemini-2.0-flash-thinking-exp-01-21'...
