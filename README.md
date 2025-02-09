@@ -64,9 +64,9 @@ Sending prompt to model 'gemini-2.0-flash-exp'...
 
 AI Response:
 
-/`/`/`bash
+\```bash
 find projects/ -type f -print
-/`/`/`
+\```
 
 ```
 
