@@ -57,6 +57,17 @@ Sending prompt to model 'gemini-2.0-flash-thinking-exp-01-21'...
 AI Response:
 
 The capital of France is **Paris**.
+
+$ clippy ask "Give me the commandline to list all the files in folder projects/ recursively. The command should show list the file names only and noth
+ing else"
+Sending prompt to model 'gemini-2.0-flash-exp'...
+
+AI Response:
+
+/`/`/`bash
+find projects/ -type f -print
+/`/`/`
+
 ```
 
 If you install the [yek utility](https://github.com/bodo-run/yek), then you can
