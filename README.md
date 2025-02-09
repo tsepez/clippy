@@ -49,7 +49,7 @@ clippy set_model <model_name>:<your_api_key>
 
 ### Examples
 
-```bash
+````bash
 $ clippy set_model gemini-2.0-flash-thinking-exp-01-21:<gemini-api-key>
 $ clippy ask "what is the capital of France?"
 Sending prompt to model 'gemini-2.0-flash-thinking-exp-01-21'...
@@ -64,19 +64,19 @@ Sending prompt to model 'gemini-2.0-flash-exp'...
 
 AI Response:
 
-````bash
+```bash
 find projects/ -type f -print
-````
+```
 
 $ man ffmpeg | clippy ask "give me the ffmpeg commandline to shorten a video in half"
 Sending prompt to model 'gemini-2.0-flash-exp'...
 
 AI Response:
 
-````bash
+```bash
 ffmpeg -i input.mp4 -ss 0 -to $(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 input.mp4 | awk '{printf "%.3f\n", $1/2}') -c copy output.mp4
-````
 ```
+````
 
 If you install the [yek utility](https://github.com/bodo-run/yek), then you can
 do the following:
