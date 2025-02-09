@@ -47,7 +47,7 @@ clippy set_model <model_name>:<your_api_key>
 ```
 
 
-### Example
+### Examples
 
 ```bash
 $ clippy set_model gemini-2.0-flash-thinking-exp-01-21:<gemini-api-key>
