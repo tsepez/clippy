@@ -88,13 +88,37 @@ Sending prompt to model 'gemini-2.0-flash-thinking-exp-01-21'...
 
 AI Response:
 
-Okay, let's break down this `cryptos` project based on the provided README and code snippets.  Here's a high-level overview:
+Okay, here's a high-level overview of the project:
 
-This project is a **pure Python implementation of Bitcoin**, designed for **educational purposes**.  It's built from scratch with **zero dependencies**, meaning it doesn't rely on any external libraries. The primary goal is to demonstrate and understand the inner workings of Bitcoin and its underlying cryptographic primitives.
+**Overall Goal:**
 
-Here's a feature-by-feature breakdown:
-*   **Core Crypto Primitives:**
-    *   **SHA-256:**  A fundamental cryptographic hash function used extensively in Bitcoin. The project includes a pure Python implementation (`cryptos/sha256.py`) that closely follows the NIST specification.  It's explicitly stated as being slow and for educational use only, showcasing how SHA-256 works at a code level.  Example usage is provided comparing its output to `shasum`.
-    *   **RIPEMD-160:** Another hash function, used in Bitcoin addresses. While SHA-256 is implemented from scratch, RIPEMD-160 (`cryptos/ripemd160.py`) reuses an existing Python implementation with some cleanups, likely due to its greater complexity.
-    ....
+- To build a pure Python, zero-dependency implementation of Bitcoin for educational purposes.
+
+**Key Components & Functionality:**
+
+- **`blog.ipynb`:**
+    - A Jupyter Notebook that guides the user through creating, digitally signing, and broadcasting a Bitcoin transaction from scratch.
+    - Covers cryptographic identity generation (private/public keypairs using Elliptic Curve Cryptography).
+    - Implements SHA256 and RIPEMD160 hash functions from scratch.
+    - Derives Bitcoin wallet addresses.
+    - Explains transaction structure, inputs, outputs, and fees.
+    - Details digital signature creation using ECDSA.
+    - Shows how to broadcast a transaction to the Bitcoin network (using a third-party service).
+- **`cryptos` directory:** Contains Python modules with the core implementations.
+    - **`__init__.py`:**  Empty file, likely used to make the directory a Python package.
+    - **`block.py`:** Defines the `Block` object, related functions, and constants for working with Bitcoin blocks.
+        - Includes decoding and encoding blocks from bytes
+        - Calculating the Block ID, the target and the difficulty
+        - Functionality to validate a block.
+    - **`ecdsa.py`:** Implements the Elliptic Curve Digital Signature Algorithm (ECDSA) for signing and verifying transactions.
+    - **`bitcoin.py`:** Contains Bitcoin-specific constants and parameters, such as the `BITCOIN` object holding curve and generator information.
+    - **`network.py`:** Implements classes and utilities for connecting to Bitcoin nodes and communicating using the Bitcoin protocol. Includes functions for encoding/decoding version, verack, ping, pong, getheaders and headers messages
+    - **`ripemd160.py`:** Provides a pure Python implementation of the RIPEMD-160 hash function.
+    - **`sha256.py`:** Implements the SHA-256 hash function from scratch.
+    - **`transaction.py`:** Defines the `Tx`, `TxIn`, `TxOut`, and `Script` objects for working with Bitcoin transactions. Implements decoding and encoding transactions from bytes. Includes functions for calculating transaction IDs, and fees.
+    - **`keys.py`:** Utilities for generating secret/public key pairs and deriving Bitcoin addresses. Implements base58 encoding/decoding.
+- **`tests` directory:** Contains unit tests for the modules in the `cryptos` directory.
+- **`README.md`:** Provides a high-level overview of the project, including instructions on how to use the code and run the tests.
+- **`getnewaddress.py`:** A command-line tool to generate a new Bitcoin secret/public key pair and address.
+
 ```
