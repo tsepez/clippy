@@ -51,7 +51,7 @@ clippy set_model <model_name>:<your_api_key>
 
 ```bash
 $ clippy set_model gemini-2.0-flash-thinking-exp-01-21:<gemini-api-key>
-$ clippy ask "what is the capital of France?"`
+$ clippy ask "what is the capital of France?"
 Sending prompt to model 'gemini-2.0-flash-thinking-exp-01-21'...
 
 AI Response:
@@ -59,7 +59,7 @@ AI Response:
 The capital of France is **Paris**.
 ```
 
-If you install the yek utility (https://github.com/bodo-run/yek), then you can
+If you install the [yek utility](https://github.com/bodo-run/yek), then you can
 do the following:
 
 ```bash
