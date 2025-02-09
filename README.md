@@ -64,18 +64,18 @@ Sending prompt to model 'gemini-2.0-flash-exp'...
 
 AI Response:
 
-\```bash
+````bash
 find projects/ -type f -print
-\```
+````
 
 $ man ffmpeg | clippy ask "give me the ffmpeg commandline to shorten a video in half"
 Sending prompt to model 'gemini-2.0-flash-exp'...
 
 AI Response:
 
-\```bash
+````bash
 ffmpeg -i input.mp4 -ss 0 -to $(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 input.mp4 | awk '{printf "%.3f\n", $1/2}') -c copy output.mp4
-\```
+````
 ```
 
 If you install the [yek utility](https://github.com/bodo-run/yek), then you can
