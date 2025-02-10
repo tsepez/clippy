@@ -1,2 +1,2 @@
 @echo off
-python clippy %*
+python "%~dp0clippy" %*
