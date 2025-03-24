@@ -15,10 +15,6 @@
 ### Prerequisites
 
 *   **Python 3.6 or higher:** Make sure you have Python installed on your system.
-*   **OpenAI Python Library:** Install the `openai` library using pip:
-    ```bash
-    pip install openai
-    ```
 
 ### Installation
 
