@@ -18,21 +18,39 @@
 
 ### Installation
 
-1.  **Download the `clippy` script:** Save the provided Python script as `clippy` (or any name you prefer).
-2.  **Make it executable:**  Give the script execute permissions:
-    ```bash
-    chmod +x clippy
-    ```
-3.  **Move to your PATH (Optional):** For easier access from anywhere in your terminal, you can move the `clippy` script to a directory in your system's PATH, such as `/usr/local/bin/` or `~/bin/`.
-    ```bash
-    # Example for /usr/local/bin (may require sudo)
-    sudo mv clippy /usr/local/bin/
-    ```
-    or
-    ```bash
-    # Example for ~/bin (ensure ~/bin is in your PATH)
-    mv clippy ~/bin/
-    ```
+## Installation
+
+1.  **Download the `clippy` script:**
+   -   Just clone this git repo or if you are on Linux/Mac:
+
+       ```
+       curl -L -o clippy https://raw.githubusercontent.com/nedn/clippy/main/clippy
+       ```
+
+2.  **Add to PATH:**
+
+    **Linux/macOS:**
+
+    -   Add the following line to your shell's configuration file (e.g., `~/.bashrc`, `~/.zshrc`):
+
+        ```bash
+        export PATH="$PATH:/path/to/directory/containing/clippy"
+        ```
+         Replace `/path/to/directory/containing/` with the *actual* path to the directory where you saved `clippy`.
+
+    -   Reload your shell configuration:
+
+        ```bash
+        source ~/.bashrc  # Or source ~/.zshrc, etc.
+        ```
+    **Windows:**
+
+    1.  Search for "environment variables" in the Start Menu and select "**Edit the system environment variables**".
+    2.  Click the "**Environment Variables...**" button.
+    3.  Under "**System variables**", select the `Path` variable and click "**Edit...**".
+    4.  Click "**New**" and add the full path to the directory containing the `clippy` script.
+    5.  Click "**OK**" on all open windows.
+    6.  **Restart your terminal** for the changes to take effect.
 
 ### Configuration
 
