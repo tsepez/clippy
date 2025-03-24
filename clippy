@@ -38,17 +38,17 @@ def set_model(args):
    # Initialize models dict if it doesn't exist
     if 'models' not in config:
         config['models'] = {}
-    
+
     # Store the model configuration
     config['models'][model_name] = {
         'api_key': api_key
     }
-    
+
     # Set as default if requested or if it's the only model
     if args.default or len(config['models']) == 1:
         config['default_model'] = model_name
         print(f"Model '{model_name}' set as default.")
-    
+
     save_config(config)
     print(f"Model '{model_name}' configured successfully.")
 
@@ -124,25 +124,37 @@ Specifically:
 Your goal is to be a helpful and efficient assistant that provides clear, concise, and well-formatted information suitable for a command-line environment.
 """
 
+def _get_default_system_prompt():
+    """Returns the default system prompt, augmented with OS information."""
+    os_info = ""
+    try:
+        import platform
+        os_info = f"  - **OS:** {platform.system()} {platform.release()} ({platform.machine()})"
+
+    except ImportError:
+        os_info = "  - **OS:** (Could not determine)"
+
+    return _SYSTEM_PROMPT + "\n" + os_info
+
 
 def ask(args):
     """Asks a question to the AI model."""
     config = load_config()
-    
+
     if 'models' not in config or not config['models']:
         print("Error: No models configured. Please use 'clippy set_model <model_name>:<api_key>' first.")
         return
-    
+
     # Use specified model or default model
     model_name = args.model or config.get('default_model')
     if not model_name:
         print("Error: No model specified and no default model set. Please specify a model with --model or set a default.")
         return
-    
+
     if model_name not in config['models']:
         print(f"Error: Model '{model_name}' not found in configuration. Available models: {', '.join(config['models'].keys())}")
         return
-    
+
     api_key = config['models'][model_name]['api_key']
 
     if not model_name or not api_key: # API key is now required
@@ -164,7 +176,7 @@ def ask(args):
         return
 
     ai_response = ask_ai(prompt, model_name, api_key,
-                         system_prompt=_SYSTEM_PROMPT)
+                         system_prompt=_get_default_system_prompt())
     if ai_response:
         print("\nAI Response:\n")
         print(ai_response.strip()) # Remove leading/trailing whitespace for cleaner output
@@ -172,34 +184,34 @@ def ask(args):
 def list_models(args):
     """Lists all configured models and indicates the default model."""
     config = load_config()
-    
+
     if 'models' not in config or not config['models']:
         print("No models configured. Use 'clippy set_model <model_name>:<api_key>' to add a model.")
         return
-    
+
     default_model = config.get('default_model')
     print("\nConfigured Models:")
     for model_name in config['models']:
         prefix = "* " if model_name == default_model else "  "
         print(f"{prefix}{model_name}")
-    
+
     if default_model:
         print("\n* indicates default model")
 
 def change_default(args):
     """Changes the default model to another existing model."""
     config = load_config()
-    
+
     if 'models' not in config or not config['models']:
         print("No models configured. Use 'clippy set_model <model_name>:<api_key>' first.")
         return
-    
+
     model_name = args.model
     if model_name not in config['models']:
         print(f"Error: Model '{model_name}' not found in configuration.")
         print(f"Available models: {', '.join(config['models'].keys())}")
         return
-    
+
     config['default_model'] = model_name
     save_config(config)
     print(f"Default model changed to '{model_name}'.")
