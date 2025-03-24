@@ -265,8 +265,34 @@ def ask(args):
     ai_response = ask_ai(prompt, model_name, api_key,
                          system_prompt=_get_default_system_prompt())
     if ai_response:
+        # Use ANSI escape codes for colored output
+        RED = "\033[31m"
+        GREEN = "\033[32m"
+        YELLOW = "\033[33m"
+        BLUE = "\033[34m"
+        MAGENTA = "\033[35m"
+        CYAN = "\033[36m"
+        RESET = "\033[0m"
+
         print("\nAI Response:\n")
-        print(ai_response.strip()) # Remove leading/trailing whitespace for cleaner output
+        
+        # Highlight code blocks
+        def highlight_code(text):
+            lines = text.splitlines()
+            in_code_block = False
+            highlighted_lines = []
+            for line in lines:
+                if line.startswith("```"):
+                    in_code_block = not in_code_block
+                    highlighted_lines.append(line)  # Keep the backticks
+                elif in_code_block:
+                    highlighted_lines.append(CYAN + line + RESET)
+                else:
+                    highlighted_lines.append(line)
+            return "\n".join(highlighted_lines)
+
+        print(highlight_code(ai_response.strip())) # Remove leading/trailing whitespace for cleaner output
+
 
 def list_models(args):
     """Lists all configured models and indicates the default model."""
