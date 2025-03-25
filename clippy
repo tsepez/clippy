@@ -545,6 +545,40 @@ def set_default_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
         return False
 
 
+def remove_model_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
+    """Removes a configured model. Returns True on success."""
+    model_name = args.model.strip()
+
+    if not config.get('models'):
+        error_print("No models configured yet.")
+        return True # Nothing to remove, not really an error state
+
+    if model_name not in config['models']:
+        error_print(f"Model '{color_text(model_name, CYAN)}' not found in configuration.")
+        list_models_cmd(args, config) # Show available models
+        return False
+
+    # Remove the model
+    del config['models'][model_name]
+    info_print(f"Removed model '{color_text(model_name, CYAN)}'.")
+
+    # Check if it was the default model
+    if config.get('default_model') == model_name:
+        config['default_model'] = None
+        warn_print(f"Removed model was the default. No default model is set now.")
+        # Suggest setting a new default if other models exist
+        if config['models']:
+            info_print("You can set a new default using 'clippy set_default <model_name>'.")
+
+    # Save the updated config
+    if save_config(config):
+        success_print(f"Configuration updated.")
+        return True
+    else:
+        # save_config already printed an error
+        return False
+
+
 # --- Main Execution ---
 
 def main() -> None:
@@ -593,8 +627,6 @@ def main() -> None:
         '--model', '-m',
         help='Specify the model name to use (overrides the default model).'
         )
-    # Future: Add arguments for temperature, max_tokens, system_prompt override etc.
-    # ask_parser.add_argument('--temp', type=float, default=0.7, help='Set generation temperature.')
     ask_parser.set_defaults(func=ask_cmd)
 
     # --- list command ---
@@ -615,6 +647,19 @@ def main() -> None:
         help='Name of the configured model to set as default.'
         )
     set_default_parser.set_defaults(func=set_default_cmd)
+
+    # --- remove_model command ---
+    remove_model_parser = subparsers.add_parser(
+        'remove_model',
+        help='Remove a configured model',
+        aliases=['rm'], # Add common alias
+        description='Removes the specified model configuration. If the removed model was the default, the default will be unset.'
+        )
+    remove_model_parser.add_argument(
+        'model',
+        help='Name of the configured model to remove.'
+        )
+    remove_model_parser.set_defaults(func=remove_model_cmd)
 
     # --- Parse arguments ---
     args = parser.parse_args()
