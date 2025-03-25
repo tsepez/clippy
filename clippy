@@ -5,421 +5,629 @@ import json
 import os
 import sys
 import platform
-from typing import Dict, List, Any, Optional, Tuple
+import textwrap  # Built-in
+from typing import Dict, List, Any, Optional, Tuple, Callable
 
-# Added dependency: requests (pip install requests)
+# --- Dependency Check ---
 try:
     import requests
 except ImportError:
-    print("Error: 'requests' library not found. Please install it: pip install requests", file=sys.stderr)
+    print(
+        "Error: The 'requests' library is required but not found.",
+        "Please install it: python -m pip install requests",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 # --- Constants ---
 CONFIG_DIR = os.path.expanduser("~/.clippy")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+DEFAULT_TIMEOUT = 60  # Default request timeout in seconds
 
 # ANSI Color Codes
+# Use functions for clarity and to ensure reset
+def color_text(text: str, color_code: str) -> str:
+    """Applies ANSI color code to text, ensuring reset."""
+    # Disable color if output is not a TTY (e.g., redirected to file)
+    if not sys.stdout.isatty():
+        return text
+    # Disable color on Windows if colorama is not installed (conservative)
+    # Basic ANSI support is better in newer Windows terminals, but this is safer
+    if platform.system() == "Windows":
+        # Could add a check for WT_SESSION or similar env vars if needed
+        pass # Allow colors, modern terminals often support them
+    return f"{color_code}{text}\033[0m"
+
 RED = "\033[31m"
 GREEN = "\033[32m"
+YELLOW = "\033[33m" # Added for warnings
 CYAN = "\033[36m"
-RESET = "\033[0m"
+BOLD = "\033[1m"
+RESET = "\033[0m" # Keep for internal use if needed
 
-BOLD = "\033[1m" # Add bold constant here if needed elsewhere
+def error_print(*args, **kwargs):
+    """Prints arguments to stderr in red."""
+    print(color_text("Error:", RED), *args, file=sys.stderr, **kwargs)
 
-# API Base URLs Mapping (using prefixes)
-API_BASE_URLS = {
-    "gpt-": "https://api.openai.com/v1/chat/completions",
-    "gemini-": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", # Assumes OpenAI compatibility layer
-    "claude-": "https://api.anthropic.com/v1/messages",
+def warn_print(*args, **kwargs):
+    """Prints arguments to stderr in yellow."""
+    print(color_text("Warning:", YELLOW), *args, file=sys.stderr, **kwargs)
+
+def success_print(*args, **kwargs):
+    """Prints arguments to stdout in green."""
+    print(color_text("Success:", GREEN), *args, **kwargs)
+
+def info_print(*args, **kwargs):
+    """Prints arguments to stdout (standard color)."""
+    print(*args, **kwargs)
+
+
+# --- Provider Configuration ---
+
+# Define types for provider functions
+HeaderFactory = Callable[[str], Dict[str, str]]
+PayloadFactory = Callable[[str, List[Dict[str, str]], Optional[int], float], Dict[str, Any]]
+ResponseParser = Callable[[Dict[str, Any]], Optional[str]]
+
+class ProviderConfig:
+    """Holds configuration and logic for a specific API provider type."""
+    def __init__(self, base_url: str, header_factory: HeaderFactory, payload_factory: PayloadFactory, response_parser: ResponseParser):
+        self.base_url = base_url
+        self.header_factory = header_factory
+        self.payload_factory = payload_factory
+        self.response_parser = response_parser
+
+# --- Provider Specific Implementations ---
+
+# OpenAI & Compatible (e.g., Gemini via OpenAI endpoint)
+def _openai_headers(api_key: str) -> Dict[str, str]:
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+def _openai_payload(model: str, messages: List[Dict[str, str]], max_tokens: Optional[int], temperature: float) -> Dict[str, Any]:
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    return payload
+
+def _openai_parser(response: Dict[str, Any]) -> Optional[str]:
+    try:
+        # Check for standard OpenAI error structure first
+        if "error" in response and isinstance(response["error"], dict):
+             err_msg = response["error"].get("message", "Unknown OpenAI API Error")
+             raise ValueError(f"API Error: {err_msg}")
+        elif "error" in response: # Sometimes it might be just a string
+             raise ValueError(f"API Error: {response['error']}")
+
+        choice = response.get("choices", [{}])[0]
+        message = choice.get("message", {})
+        content = message.get("content")
+        if content is None:
+             # Check for alternative structure (less common now)
+             content = choice.get("text") # Older completion endpoint style?
+        return content
+    except (IndexError, KeyError, AttributeError, TypeError) as e:
+        raise ValueError(f"Could not parse API response structure: {e}. Response: {response}") from e
+
+
+# Anthropic
+def _anthropic_headers(api_key: str) -> Dict[str, str]:
+    return {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01", # Consider making configurable if needed later
+        "content-type": "application/json",
+    }
+
+def _anthropic_payload(model: str, messages: List[Dict[str, str]], max_tokens: Optional[int], temperature: float) -> Dict[str, Any]:
+    system_prompt = next((msg["content"] for msg in messages if msg["role"] == "system"), None)
+    # Anthropic requires messages alternating user/assistant, starting with user.
+    # We need to filter and potentially adapt the history if it doesn't fit.
+    # For simplicity here, we just take the last user message if no system prompt,
+    # or combine system and last user message. A more robust solution would handle
+    # proper conversation history merging/truncation.
+    user_messages = [msg for msg in messages if msg["role"] == "user" or msg["role"] == "assistant"]
+    # Ensure it starts with 'user' if possible, remove leading 'assistant' if necessary
+    while user_messages and user_messages[0]["role"] == "assistant":
+        user_messages.pop(0)
+    # Ensure alternation (simple approach: remove consecutive same roles)
+    valid_messages = []
+    last_role = None
+    for msg in user_messages:
+        if msg["role"] != last_role:
+            valid_messages.append(msg)
+            last_role = msg["role"]
+        # If roles are the same, we could try merging content, but skipping is simpler for now
+        # else: # Optional: merge consecutive messages of the same role
+        #    if valid_messages: valid_messages[-1]["content"] += "\n" + msg["content"]
+
+    if not valid_messages and system_prompt:
+         # If only a system prompt exists, Anthropic needs a dummy user message
+         warn_print("Only system prompt provided; adding empty user message for Anthropic.")
+         valid_messages.append({"role": "user", "content": "..."}) # Or maybe use the system prompt as user prompt?
+    elif not valid_messages:
+         raise ValueError("No valid user messages found for Anthropic payload")
+
+
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens or 1024, # Anthropic requires max_tokens
+        "messages": valid_messages,
+        "temperature": temperature,
+    }
+    if system_prompt:
+        payload["system"] = system_prompt
+    return payload
+
+def _anthropic_parser(response: Dict[str, Any]) -> Optional[str]:
+    try:
+        # Check for Anthropic specific error structure
+        if response.get("type") == "error":
+            err_msg = response.get("error", {}).get("message", "Unknown Anthropic Error")
+            raise ValueError(f"Anthropic API Error: {err_msg}")
+
+        # Extract content (Anthropic's structure is different)
+        content_blocks = response.get("content", [])
+        if not content_blocks:
+             # Handle streaming or alternative formats if necessary in the future
+             return None # Or raise error if content is expected
+        # Combine text from potentially multiple content blocks
+        full_text = "".join(block.get("text", "") for block in content_blocks if block.get("type") == "text")
+        return full_text if full_text else None
+    except (IndexError, KeyError, AttributeError, TypeError) as e:
+        raise ValueError(f"Could not parse Anthropic response structure: {e}. Response: {response}") from e
+
+# --- Provider Registry ---
+
+PROVIDER_TYPES = {
+    "openai": ProviderConfig(
+        base_url="https://api.openai.com/v1/chat/completions",
+        header_factory=_openai_headers,
+        payload_factory=_openai_payload,
+        response_parser=_openai_parser,
+    ),
+    "google": ProviderConfig(
+        # Using the OpenAI compatible endpoint for Gemini
+        # Let's stick to the OpenAI Compatibility endpoint provided in the original code for simplicity
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        header_factory=_openai_headers, # Assumes Bearer token works (API Key might need different header) - REQUIRES VERIFICATION if using direct Google API Key
+        # If using a Google API Key directly (not OAuth), header might be {'x-goog-api-key': api_key}
+        payload_factory=_openai_payload,
+        response_parser=_openai_parser, # Assumes OpenAI structure
+    ),
+    "anthropic": ProviderConfig(
+        base_url="https://api.anthropic.com/v1/messages",
+        header_factory=_anthropic_headers,
+        payload_factory=_anthropic_payload,
+        response_parser=_anthropic_parser,
+    ),
 }
-DEFAULT_API_URL = "https://api.openai.com/v1/chat/completions" # Fallback
+
+# Mapping from model name prefixes to provider type keys
+MODEL_PREFIX_TO_PROVIDER = {
+    "gpt-": "openai",
+    "gemini-": "google", # Maps to the google provider config
+    "claude-": "anthropic",
+}
+DEFAULT_PROVIDER = "openai" # Fallback provider type
+
+def get_provider_type_for_model(model_name: str) -> str:
+    """Determines the provider type key based on the model name prefix."""
+    for prefix, provider_key in MODEL_PREFIX_TO_PROVIDER.items():
+        if model_name.startswith(prefix):
+            return provider_key
+    warn_print(f"Unknown model prefix for '{model_name}'. Falling back to provider type: '{DEFAULT_PROVIDER}'.")
+    return DEFAULT_PROVIDER
 
 # --- Configuration ---
 
 def load_config() -> Dict[str, Any]:
     """Loads configuration from the config file."""
+    default_config = {"models": {}, "default_model": None}
     if not os.path.exists(CONFIG_FILE):
-        return {"models": {}, "default_model": None}
+        return default_config
     try:
-        with open(CONFIG_FILE, 'r') as f:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
-            # Ensure essential keys exist
-            if "models" not in config:
-                config["models"] = {}
-            if "default_model" not in config:
-                config["default_model"] = None
+            # Ensure essential keys exist with defaults
+            config.setdefault("models", {})
+            config.setdefault("default_model", None)
             return config
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"{RED}Warning: Could not load config file ({CONFIG_FILE}): {e}{RESET}", file=sys.stderr)
-        return {"models": {}, "default_model": None}
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
+        warn_print(f"Could not load config file ({CONFIG_FILE}): {e}. Using default configuration.")
+        return default_config
 
-def save_config(config: Dict[str, Any]) -> None:
-    """Saves configuration to the config file."""
+def save_config(config: Dict[str, Any]) -> bool:
+    """Saves configuration to the config file. Returns True on success."""
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=4)
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4, ensure_ascii=False)
+        return True
     except OSError as e:
-        print(f"{RED}Error: Could not save config file ({CONFIG_FILE}): {e}{RESET}", file=sys.stderr)
-        sys.exit(1)
+        error_print(f"Could not save config file ({CONFIG_FILE}): {e}")
+        return False
 
 # --- API Client ---
 
 class ApiClient:
     """Client for making AI API requests using the requests library."""
-
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
+        # Consider adding default headers like User-Agent here if desired
+        # self.session.headers.update({"User-Agent": "ClippyAIClient/1.0"})
 
-    def make_request(self, url: str, headers: Dict[str, str], payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Makes a POST request to the specified API endpoint."""
+    def make_request(self, url: str, headers: Dict[str, str], payload: Dict[str, Any], timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+        """Makes a POST request and handles potential errors."""
         try:
-            response = self.session.post(url, headers=headers, json=payload, timeout=60) # Added timeout
-            response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
-            return response.json()
+            response = self.session.post(url, headers=headers, json=payload, timeout=timeout)
+            response.raise_for_status() # Raises HTTPError for 4xx/5xx
+            # Check if response is empty or not JSON before parsing
+            if not response.content:
+                 raise ValueError("API returned an empty response.")
+            try:
+                return response.json()
+            except json.JSONDecodeError as json_err:
+                raise ValueError(f"API returned non-JSON response (Status: {response.status_code}): {response.text[:1000]}") from json_err # Limit error text length
+
+        except requests.exceptions.Timeout as e:
+            raise TimeoutError(f"Request timed out after {timeout} seconds.") from e
+        except requests.exceptions.HTTPError as e:
+            # Try to get a more specific message from the response body if possible
+            error_msg = f"HTTP Error: {e.response.status_code} {e.response.reason}"
+            try:
+                error_data = e.response.json()
+                # Attempt to extract common error patterns (deferring detailed parsing to provider)
+                details = error_data.get('error', {}).get('message') or \
+                          error_data.get('detail') or \
+                          str(error_data) # Fallback to string representation
+                error_msg += f" - {details}"
+            except json.JSONDecodeError:
+                error_msg += f" - {e.response.text[:500]}" # Include raw text snippet
+            raise ConnectionError(error_msg) from e # Use ConnectionError for HTTP issues
         except requests.exceptions.RequestException as e:
-            # Try to get more specific error from response if available
-            error_msg = str(e)
-            if e.response is not None:
-                try:
-                    error_data = e.response.json()
-                    if isinstance(error_data, dict):
-                         # Look for common error message structures
-                        api_err = error_data.get('error', {}).get('message') or error_data.get('detail')
-                        if api_err:
-                            error_msg = f"API Error: {api_err} (Status: {e.response.status_code})"
-                        else:
-                            error_msg = f"API Error: {e.response.text} (Status: {e.response.status_code})"
-
-                except json.JSONDecodeError:
-                    error_msg = f"API Error: {e.response.text} (Status: {e.response.status_code})" # Non-JSON error response
-
-            raise Exception(f"API request failed: {error_msg}") from e
-
-
-# --- Provider Specific Logic ---
-
-ProviderDetails = Tuple[str, str] # (base_url, provider_type)
-
-def _get_provider_details(model_name: str) -> ProviderDetails:
-    """Determines the base URL and provider type based on the model name."""
-    for prefix, url in API_BASE_URLS.items():
-        if model_name.startswith(prefix):
-            if "anthropic.com" in url:
-                return url, "anthropic"
-            elif "googleapis.com" in url or "openai.com" in url:
-                 return url, "openai_compatible"
-            # Add other provider types if needed
-            return url, "unknown" # Should ideally map known URLs
-
-    print(f"Warning: Unknown model prefix for '{model_name}'. Assuming OpenAI compatible API at {DEFAULT_API_URL}.", file=sys.stderr)
-    return DEFAULT_API_URL, "openai_compatible"
-
-def _get_headers(api_key: str, provider_type: str) -> Dict[str, str]:
-    """Constructs request headers based on the provider type."""
-    if provider_type == "anthropic":
-        return {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01", # Consider making this configurable
-            "content-type": "application/json"
-        }
-    elif provider_type == "openai_compatible":
-         return {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-    else: # Default/fallback
-        return {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-
-def _prepare_payload(model: str, messages: List[Dict[str, str]], provider_type: str, max_tokens: Optional[int] = 1000, temperature: float = 0.7) -> Dict[str, Any]:
-    """Prepares the request payload based on the provider type."""
-    if provider_type == "anthropic":
-        # Anthropic specific format
-        system_prompt = next((msg["content"] for msg in messages if msg["role"] == "system"), None)
-        user_messages = [msg for msg in messages if msg["role"] == "user" or msg["role"] == "assistant"] # Keep conversation history
-
-        payload = {
-            "model": model,
-            "max_tokens": max_tokens or 1024, # Anthropic requires max_tokens
-            "messages": user_messages,
-            "temperature": temperature,
-        }
-        if system_prompt:
-            payload["system"] = system_prompt
-        return payload
-
-    elif provider_type == "openai_compatible":
-        # OpenAI / Google Gemini compatible format
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-        }
-        if max_tokens:
-            payload["max_tokens"] = max_tokens
-        return payload
-    else:
-        # Default to OpenAI compatible format as a fallback
-        print(f"Warning: Unknown provider type '{provider_type}'. Using OpenAI payload format.", file=sys.stderr)
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-        }
-        if max_tokens:
-            payload["max_tokens"] = max_tokens
-        return payload
-
-
-def _parse_response(response: Dict[str, Any], provider_type: str) -> Optional[str]:
-    """Parses the AI response based on the provider type."""
-    try:
-        if provider_type == "anthropic":
-            # Check for errors first (Anthropic specific error structure)
-            if response.get("type") == "error":
-                err_msg = response.get("error", {}).get("message", "Unknown Anthropic Error")
-                raise Exception(f"Anthropic API Error: {err_msg}")
-            # Extract content
-            return response.get("content", [{}])[0].get("text")
-        elif provider_type == "openai_compatible":
-             # OpenAI / Google Gemini compatible format
-             choice = response.get("choices", [{}])[0]
-             message = choice.get("message", {})
-             return message.get("content")
-        else:
-            # Fallback attempt (try OpenAI format)
-            print(f"Warning: Unknown provider type '{provider_type}' for parsing. Attempting OpenAI format.", file=sys.stderr)
-            choice = response.get("choices", [{}])[0]
-            message = choice.get("message", {})
-            return message.get("content")
-
-    except (IndexError, KeyError, AttributeError) as e:
-        print(f"{RED}Error: Could not parse API response: {e}{RESET}\nRaw response: {response}", file=sys.stderr)
-        return None
+            # Catch other request issues like connection errors, DNS errors etc.
+            raise ConnectionError(f"Network or request setup error: {e}") from e
+        except Exception as e: # Catch unexpected errors during the request process
+             raise RuntimeError(f"An unexpected error occurred during the API request: {e}") from e
 
 
 # --- Core Logic ---
 
-def _get_default_system_prompt() -> str:
+def get_default_system_prompt() -> str:
     """Returns the default system prompt, augmented with OS information."""
     try:
-        os_info = f"  - **OS:** {platform.system()} {platform.release()} ({platform.machine()})"
+        os_info = f"OS: {platform.system()} {platform.release()} ({platform.machine()})"
     except Exception:
-        os_info = "  - **OS:** (Could not determine)"
+        os_info = "OS: (Could not determine)"
 
-    return f"""
-You are a helpful command-line assistant. Please provide concise and well-formatted responses that are easy to read in a terminal.
+    # Use textwrap.dedent for cleaner multiline string definition
+    return textwrap.dedent(f"""
+        You are a helpful command-line assistant called Clippy.
+        Provide concise, accurate, and well-formatted responses suitable for a terminal.
 
-Specifically:
+        Guidelines:
+        - **Brevity:** Be brief and to the point. Avoid unnecessary conversation.
+        - **Formatting:** Use simple Markdown (bold `**`, lists `-`/`*`/`1.`, code blocks ```).
+        - **Readability:** Keep lines reasonably short for terminal display.
+        - **Clarity:** Focus on answering the request directly.
+        - **Environment:** You are running in a terminal environment. {os_info}.
 
-- **Be brief and to the point.** Avoid unnecessary conversational fluff or lengthy explanations unless specifically asked for.
-- **Format for readability in a terminal.** Use simple formatting like:
-    - **Bold text** using markdown syntax `**bold text**` for emphasis where helpful.
-    - **Lists** using markdown list syntax (`- item` or `1. item`) for itemized information.
-    - **Code blocks** using markdown code block syntax (``` ```) to present code or commands clearly.
-- **Keep lines reasonably short.** Avoid extremely long lines that might wrap awkwardly in terminals with limited width.
-- **Focus on providing the requested information directly.** Assume the user is looking for quick, actionable answers.
+        Aim for efficiency and clarity in your output.
+    """).strip()
 
-Your goal is to be a helpful and efficient assistant that provides clear, concise, and well-formatted information suitable for a command-line environment.
-{os_info}
-"""
-
-def ask_ai(prompt: str, model_name: str, api_key: str, system_prompt: Optional[str] = None) -> Optional[str]:
+def ask_ai(prompt: str, model_name: str, api_key: str, provider_type: str, system_prompt: Optional[str]) -> Optional[str]:
     """Sends the prompt to the specified AI model and returns the response."""
-    print(f"Sending prompt to model '{model_name}'...")
+    info_print(f"Querying model '{color_text(model_name, CYAN)}' ({provider_type})...")
 
-    base_url, provider_type = _get_provider_details(model_name)
+    provider = PROVIDER_TYPES.get(provider_type)
+    if not provider:
+        error_print(f"Provider type '{provider_type}' is not configured in PROVIDER_TYPES.")
+        return None
+
     client = ApiClient()
-    headers = _get_headers(api_key, provider_type)
 
     messages: List[Dict[str, str]] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
+    effective_system_prompt = system_prompt or get_default_system_prompt()
+    if effective_system_prompt: # Add system prompt if available
+        messages.append({"role": "system", "content": effective_system_prompt.strip()})
+    messages.append({"role": "user", "content": prompt.strip()})
 
     try:
-        payload = _prepare_payload(model_name, messages, provider_type)
-        response_data = client.make_request(base_url, headers, payload)
-        return _parse_response(response_data, provider_type)
+        headers = provider.header_factory(api_key)
+        payload = provider.payload_factory(model_name, messages, None, 0.7) # Add args for max_tokens, temp if needed
+        response_data = client.make_request(provider.base_url, headers, payload)
+        parsed_response = provider.response_parser(response_data)
+        return parsed_response
 
+    except (ValueError, ConnectionError, TimeoutError, RuntimeError) as e:
+        # These are errors expected from ApiClient or provider functions
+        error_print(f"API interaction failed: {e}")
+        return None
     except Exception as e:
-        print(f"{RED}An error occurred: {e}{RESET}", file=sys.stderr)
+        # Catch any truly unexpected errors
+        error_print(f"An unexpected error occurred during AI request: {e}")
+        # Consider logging traceback here for debugging if needed
+        # import traceback; traceback.print_exc()
         return None
 
 # --- Output Formatting ---
 
-def highlight_code(text: str) -> str:
-    """Basic syntax highlighting for markdown code blocks using ANSI colors."""
+def format_terminal_output(text: str) -> str:
+    """Basic formatting for terminal output (bold, code blocks)."""
+    if not sys.stdout.isatty(): # Skip formatting if not TTY
+        return text
+
     lines = text.splitlines()
+    formatted_lines = []
     in_code_block = False
-    highlighted_lines = []
-    for line in lines:
-        if line.strip().startswith("```"): # Check for ``` with potential whitespace
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped_line = line.strip()
+
+        if stripped_line.startswith("```"):
             in_code_block = not in_code_block
-            highlighted_lines.append(line) # Keep the backticks
+            # Keep the backticks, maybe add subtle color if desired
+            formatted_lines.append(line)
         elif in_code_block:
-            highlighted_lines.append(CYAN + line + RESET)
+            formatted_lines.append(color_text(line, CYAN))
         else:
-            # Simple bold highlighting
-            line = line.replace("**", BOLD).replace("**", RESET) # Basic bold handling
-            highlighted_lines.append(line)
-    return "\n".join(highlighted_lines)
+            # Basic **bold** handling (doesn't handle nested or complex cases)
+            # This simple replace might mess up if '**' appears naturally
+            # A regex approach could be slightly better but still limited without a parser
+            import re
+            # Replace pairs of **text** with bolded text
+            formatted_line = re.sub(r'\*\*(.*?)\*\*', lambda m: color_text(m.group(1), BOLD), line)
+            formatted_lines.append(formatted_line)
+        i += 1
+
+    # Ensure reset at the very end if the last line was colored
+    # Although color_text should handle this per-call.
+    return "\n".join(formatted_lines)
+
 
 # --- Command Functions ---
 
-def set_model_cmd(args: argparse.Namespace) -> None:
-    """Sets the AI model and API key."""
+def set_model_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
+    """Sets the AI model and API key. Returns True on success."""
     try:
         model_name, api_key = args.model_api.split(":", 1)
     except ValueError:
-        print(f"{RED}Error: Invalid format. Use <model_name>:<api_key>{RESET}", file=sys.stderr)
-        sys.exit(1)
+        error_print("Invalid format. Use <model_name>:<api_key>")
+        return False
+
+    model_name = model_name.strip()
+    api_key = api_key.strip()
 
     if not model_name or not api_key:
-         print(f"{RED}Error: Both model name and API key are required.{RESET}", file=sys.stderr)
-         sys.exit(1)
+        error_print("Both model name and API key are required.")
+        return False
 
-    config = load_config()
-    config['models'][model_name] = {'api_key': api_key}
+    provider_type = get_provider_type_for_model(model_name)
+    if provider_type not in PROVIDER_TYPES:
+         warn_print(f"Model '{model_name}' maps to unknown provider type '{provider_type}'. Configuration might be incomplete.")
+         # Decide if you want to allow this or return False
 
-    print(f"Model '{model_name}' configured.")
+    config['models'][model_name] = {'api_key': api_key, 'provider_type': provider_type}
+    info_print(f"Model '{color_text(model_name, CYAN)}' (type: {provider_type}) configured.")
 
-    if args.default or len(config['models']) == 1:
+    num_models = len(config['models'])
+    if args.default or num_models == 1:
         config['default_model'] = model_name
-        print(f"Model '{model_name}' set as default.")
+        info_print(f"Model '{color_text(model_name, CYAN)}' set as default.")
 
-    save_config(config)
+    return save_config(config)
 
-def ask_cmd(args: argparse.Namespace) -> None:
-    """Handles the 'ask' command."""
-    config = load_config()
 
+def _assemble_prompt(prompt_args: List[str]) -> str:
+    """Assembles the prompt from arguments and stdin."""
+    stdin_content = ""
+    if not sys.stdin.isatty(): # Check if data is piped
+        stdin_content = sys.stdin.read().strip()
+
+    # Combine arguments and stdin content
+    # Prioritize args, append stdin if present
+    full_prompt = " ".join(prompt_args).strip()
+    if stdin_content:
+        if full_prompt:
+            full_prompt += "\n\n" + stdin_content # Add separator if both exist
+        else:
+            full_prompt = stdin_content
+
+    return full_prompt.strip()
+
+
+def ask_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
+    """Handles the 'ask' command. Returns True on success."""
     if not config['models']:
-        print(f"{RED}Error: No models configured. Use 'clippy set_model <model_name>:<api_key>' first.{RESET}", file=sys.stderr)
-        sys.exit(1)
+        error_print("No models configured. Use 'clippy set_model <model_name>:<api_key>' first.")
+        return False
 
     model_name = args.model or config.get('default_model')
     if not model_name:
-        print(f"{RED}Error: No model specified and no default model set.{RESET}", file=sys.stderr)
-        print("Specify a model with --model or run 'clippy set_default <model_name>'.", file=sys.stderr)
-        sys.exit(1)
+        error_print("No model specified and no default model set.")
+        info_print("Specify a model with --model or run 'clippy set_default <model_name>'.")
+        list_models_cmd(args, config) # Show available models
+        return False
 
-    if model_name not in config['models']:
-        available = ', '.join(config['models'].keys())
-        print(f"{RED}Error: Model '{model_name}' not found.{RESET}", file=sys.stderr)
-        print(f"Available models: {available}", file=sys.stderr)
-        sys.exit(1)
+    model_config = config['models'].get(model_name)
+    if not model_config:
+        available = ', '.join(sorted(config['models'].keys()))
+        error_print(f"Model '{model_name}' not found.")
+        info_print(f"Available models: {available}")
+        return False
 
-    api_key = config['models'][model_name].get('api_key')
+    api_key = model_config.get('api_key')
+    provider_type = model_config.get('provider_type') # Get stored provider type
+
     if not api_key:
-         print(f"{RED}Error: API key for model '{model_name}' not found in configuration.{RESET}", file=sys.stderr)
-         sys.exit(1)
+        error_print(f"API key for model '{model_name}' is missing in configuration.")
+        return False
+    if not provider_type:
+        # Attempt to determine provider type on the fly if missing (legacy config?)
+        warn_print(f"Provider type for model '{model_name}' missing in config. Determining from prefix.")
+        provider_type = get_provider_type_for_model(model_name)
+        # Optionally save the determined type back to config here if desired
+        # config['models'][model_name]['provider_type'] = provider_type
+        # save_config(config)
 
-    # Combine prompt parts and stdin
-    prompt_parts = args.prompt or []
-    stdin_content = ""
-    if not sys.stdin.isatty():
-        stdin_content = sys.stdin.read().strip()
-        if stdin_content:
-            prompt_parts.append(stdin_content)
-
-    prompt = " ".join(prompt_parts).strip()
-
+    prompt = _assemble_prompt(args.prompt)
     if not prompt:
-        print(f"{RED}Error: Prompt cannot be empty. Provide arguments or pipe text via stdin.{RESET}", file=sys.stderr)
-        sys.exit(1)
+        error_print("Prompt cannot be empty. Provide text as arguments or pipe via stdin.")
+        return False
 
-    # Use a default system prompt
-    system_prompt = _get_default_system_prompt()
+    # Allow overriding system prompt via arg in the future?
+    # system_prompt = args.system_prompt or get_default_system_prompt()
+    system_prompt = get_default_system_prompt()
 
-    ai_response = ask_ai(prompt, model_name, api_key, system_prompt=system_prompt)
+    ai_response = ask_ai(prompt, model_name, api_key, provider_type, system_prompt=system_prompt)
 
-    if ai_response:
-        # Simple highlighting (can be improved with dedicated libraries)
-        highlighted_response = highlight_code(ai_response.strip())
-        print("\n" + BOLD + "AI Response:" + RESET + "\n")
-        print(highlighted_response)
+    if ai_response is not None:
+        formatted_response = format_terminal_output(ai_response.strip())
+        print("\n" + color_text("AI Response:", BOLD) + "\n")
+        print(formatted_response)
+        return True
     else:
-        # Error message already printed by ask_ai
-        sys.exit(1)
+        # Error message already printed by ask_ai or dependent functions
+        return False
 
-def list_models_cmd(args: argparse.Namespace) -> None:
-    """Lists configured models."""
-    config = load_config()
+
+def list_models_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
+    """Lists configured models. Returns True."""
     models = config.get('models', {})
     default_model = config.get('default_model')
 
     if not models:
-        print("No models configured. Use 'clippy set_model <model_name>:<api_key>' to add one.")
-        return
+        info_print("No models configured. Use 'clippy set_model <model_name>:<api_key>' to add one.")
+        return True
 
-    print("\n**Configured Models:**")
+    info_print("\n" + color_text("Configured Models:", BOLD))
     for name in sorted(models.keys()):
-        prefix = f"{GREEN}* {RESET}" if name == default_model else "  "
-        print(f"{prefix}{name}")
+        provider_type = get_provider_type_for_model(name)
+        is_default = (name == default_model)
+        prefix = color_text("* ", GREEN) if is_default else "  "
+        info_print(f"{prefix}{color_text(name, CYAN)} ({provider_type})")
 
     if default_model:
-        print(f"\n({GREEN}*{RESET} indicates default model)")
+        info_print(f"\n({color_text('*', GREEN)} indicates the default model)")
     else:
-        print("\nNo default model set. Use 'clippy set_default <model_name>'.")
+        info_print("\nNo default model set. Use 'clippy set_default <model_name>'.")
+    return True
 
 
-def set_default_cmd(args: argparse.Namespace) -> None:
-    """Changes the default model."""
-    config = load_config()
-    model_name = args.model
+def set_default_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
+    """Changes the default model. Returns True on success."""
+    model_name = args.model.strip()
 
     if not config.get('models'):
-        print(f"{RED}Error: No models configured yet.{RESET}", file=sys.stderr)
-        sys.exit(1)
+        error_print("No models configured yet.")
+        return False
 
     if model_name not in config['models']:
-        available = ', '.join(config['models'].keys())
-        print(f"{RED}Error: Model '{model_name}' not found.{RESET}", file=sys.stderr)
-        print(f"Available models: {available}", file=sys.stderr)
-        sys.exit(1)
+        available = ', '.join(sorted(config['models'].keys()))
+        error_print(f"Model '{model_name}' not found.")
+        info_print(f"Available models: {available}")
+        return False
 
     config['default_model'] = model_name
-    save_config(config)
-    print(f"Default model set to '{model_name}'.")
+    if save_config(config):
+        success_print(f"Default model set to '{color_text(model_name, CYAN)}'.")
+        return True
+    else:
+        # save_config already printed an error
+        return False
+
 
 # --- Main Execution ---
 
 def main() -> None:
+    """Parses arguments and executes the corresponding command."""
     parser = argparse.ArgumentParser(
-        description="Clippy: Your AI Command-Line Assistant (OpenAI, Google, Anthropic)",
-        formatter_class=argparse.RawTextHelpFormatter # Keep help text formatting
+        description="Clippy: Your AI Command-Line Assistant (Supports OpenAI, Google, Anthropic compatible APIs)",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=f"Configuration stored in: {CONFIG_FILE}"
     )
-    subparsers = parser.add_subparsers(title='Commands', dest='command', required=True) # Make command required
+    subparsers = parser.add_subparsers(
+        title='Commands',
+        dest='command',
+        required=True,
+        help="Available actions"
+    )
 
-    # set_model command
-    set_model_parser = subparsers.add_parser('set_model', help='Configure an AI model: <model_name>:<api_key>')
-    set_model_parser.add_argument('model_api', help='Model name and API key string')
-    set_model_parser.add_argument('--default', '-d', action='store_true', help='Set this model as the default')
+    # --- set_model command ---
+    set_model_parser = subparsers.add_parser(
+        'set_model',
+        help='Configure a new or existing AI model',
+        description='Adds or updates a model configuration using the format <model_name>:<api_key>. The provider type (openai, google, anthropic) is inferred from the model name prefix (e.g., "gpt-", "gemini-", "claude-").'
+        )
+    set_model_parser.add_argument(
+        'model_api',
+        help='Model name and API key string, e.g., "gpt-4o:sk-..."'
+        )
+    set_model_parser.add_argument(
+        '--default', '-d',
+        action='store_true',
+        help='Set this model as the default for the "ask" command.'
+        )
     set_model_parser.set_defaults(func=set_model_cmd)
 
-    # ask command
-    ask_parser = subparsers.add_parser('ask', help='Ask the AI (reads from args and stdin)')
-    ask_parser.add_argument('prompt', nargs='*', help='The prompt text (optional if using stdin)') # Changed to nargs='*'
-    ask_parser.add_argument('--model', '-m', help='Specify model to use (overrides default)')
+    # --- ask command ---
+    ask_parser = subparsers.add_parser(
+        'ask',
+        help='Ask the configured AI a question (reads prompt from args and stdin)',
+        description='Sends a prompt to the selected AI model. Reads prompt text from command-line arguments, and if stdin is not a TTY, appends text piped to it.'
+        )
+    ask_parser.add_argument(
+        'prompt',
+        nargs='*', # 0 or more arguments
+        help='The prompt text. If empty and stdin is used, stdin becomes the prompt.'
+        )
+    ask_parser.add_argument(
+        '--model', '-m',
+        help='Specify the model name to use (overrides the default model).'
+        )
+    # Future: Add arguments for temperature, max_tokens, system_prompt override etc.
+    # ask_parser.add_argument('--temp', type=float, default=0.7, help='Set generation temperature.')
     ask_parser.set_defaults(func=ask_cmd)
 
-    # list_models command
-    list_models_parser = subparsers.add_parser('list', help='List configured models') # Shortened command name
+    # --- list command ---
+    list_models_parser = subparsers.add_parser(
+        'list',
+        help='List all configured models and the default',
+        aliases=['ls'] # Add common alias
+        )
     list_models_parser.set_defaults(func=list_models_cmd)
 
-    # set_default command
-    set_default_parser = subparsers.add_parser('set_default', help='Set the default model to use for "ask"')
-    set_default_parser.add_argument('model', help='Name of the configured model')
+    # --- set_default command ---
+    set_default_parser = subparsers.add_parser(
+        'set_default',
+        help='Set the default model to use for the "ask" command'
+        )
+    set_default_parser.add_argument(
+        'model',
+        help='Name of the configured model to set as default.'
+        )
     set_default_parser.set_defaults(func=set_default_cmd)
 
+    # --- Parse arguments ---
     args = parser.parse_args()
 
-    # Execute the function associated with the chosen command
-    args.func(args)
+    # --- Load config ---
+    config = load_config()
+
+    # --- Execute command ---
+    # Pass config to command functions that need it
+    success = args.func(args, config) # All command functions now accept config
+
+    # --- Exit status ---
+    sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":
