@@ -5,7 +5,8 @@ import json
 import os
 import sys
 import platform
-import textwrap  # Built-in
+import textwrap
+import subprocess
 from typing import Dict, List, Any, Optional, Tuple, Callable
 
 # --- Dependency Check ---
@@ -23,6 +24,7 @@ except ImportError:
 CONFIG_DIR = os.path.expanduser("~/.clippy")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 DEFAULT_TIMEOUT = 60  # Default request timeout in seconds
+CLIPPY_REPO_URL = "https://github.com/nedn/clippy" # Added repo URL
 
 # ANSI Color Codes
 # Use functions for clarity and to ensure reset
@@ -60,6 +62,77 @@ def success_print(*args, **kwargs):
 def info_print(*args, **kwargs):
     """Prints arguments to stdout (standard color)."""
     print(*args, **kwargs)
+
+
+# --- Update Check ---
+
+def run_git_command(command: List[str]) -> Tuple[Optional[str], Optional[str], int]:
+    """Runs a git command and returns stdout, stderr, and return code."""
+    try:
+        process = subprocess.run(
+            ["git"] + command,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            check=False, # Don't raise exception on non-zero exit
+            cwd=os.path.dirname(__file__) # Run git in the script's directory
+        )
+        return process.stdout.strip(), process.stderr.strip(), process.returncode
+    except FileNotFoundError:
+        # Git command not found
+        return None, "Git command not found. Please ensure git is installed and in your PATH.", -1
+    except Exception as e:
+        return None, f"Failed to run git command: {e}", -1
+
+def check_for_updates():
+    """Checks if the local clippy script is behind the remote main branch."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # 1. Check if inside a git repository
+    stdout, stderr, retcode = run_git_command(["rev-parse", "--is-inside-work-tree"])
+    if retcode != 0 or stdout != 'true':
+        # warn_print("Not running inside a git repository. Skipping update check.")
+        return # Silently skip if not in a git repo
+
+    # 2. Check if remote 'origin' points to the correct repo
+    stdout, stderr, retcode = run_git_command(["remote", "get-url", "origin"])
+    if retcode != 0 or not stdout or CLIPPY_REPO_URL not in stdout:
+        # warn_print(f"Git remote 'origin' does not point to {CLIPPY_REPO_URL}. Skipping update check.")
+        return # Silently skip if remote is wrong
+
+    # 3. Fetch latest changes from origin/main (quietly)
+    info_print("Checking for script updates...")
+    _, stderr, retcode = run_git_command(["fetch", "origin", "main", "--quiet"])
+    if retcode != 0:
+        warn_print(f"Failed to fetch updates from remote: {stderr}. Skipping update check.")
+        return
+
+    # 4. Get local and remote commit hashes
+    local_hash, stderr, retcode_local = run_git_command(["rev-parse", "HEAD"])
+    remote_hash, stderr, retcode_remote = run_git_command(["rev-parse", "origin/main"])
+
+    if retcode_local != 0 or retcode_remote != 0:
+        warn_print("Could not determine local or remote commit hash. Skipping update check.")
+        return
+
+    if local_hash == remote_hash:
+        # info_print("Clippy script is up to date.") # Optional: notify if up-to-date
+        return
+
+    # 5. Check if local commit is an ancestor of the remote commit
+    # If `git merge-base --is-ancestor local_hash remote_hash` returns 0, local is an ancestor (or same)
+    _, _, retcode_ancestor = run_git_command(["merge-base", "--is-ancestor", local_hash, remote_hash])
+
+    if retcode_ancestor == 0:
+        # Local commit IS an ancestor of the remote commit, meaning local is behind.
+        warn_print(f"Your clippy script is behind the main branch ({CLIPPY_REPO_URL}).")
+        warn_print("Consider updating by running: git pull origin main")
+    # elif retcode_ancestor == 1:
+        # Local commit is NOT an ancestor (diverged or ahead). No warning needed in this case.
+        # pass
+    # else:
+        # Error running merge-base
+        # warn_print("Could not compare local and remote versions. Skipping update check.")
+        # pass
 
 
 # --- Provider Configuration ---
@@ -100,17 +173,17 @@ def _openai_parser(response: Dict[str, Any]) -> Optional[str]:
     try:
         # Check for standard OpenAI error structure first
         if "error" in response and isinstance(response["error"], dict):
-             err_msg = response["error"].get("message", "Unknown OpenAI API Error")
-             raise ValueError(f"API Error: {err_msg}")
+            err_msg = response["error"].get("message", "Unknown OpenAI API Error")
+            raise ValueError(f"API Error: {err_msg}")
         elif "error" in response: # Sometimes it might be just a string
-             raise ValueError(f"API Error: {response['error']}")
+            raise ValueError(f"API Error: {response['error']}")
 
         choice = response.get("choices", [{}])[0]
         message = choice.get("message", {})
         content = message.get("content")
         if content is None:
-             # Check for alternative structure (less common now)
-             content = choice.get("text") # Older completion endpoint style?
+            # Check for alternative structure (less common now)
+            content = choice.get("text") # Older completion endpoint style?
         return content
     except (IndexError, KeyError, AttributeError, TypeError) as e:
         raise ValueError(f"Could not parse API response structure: {e}. Response: {response}") from e
@@ -144,14 +217,14 @@ def _anthropic_payload(model: str, messages: List[Dict[str, str]], max_tokens: O
             last_role = msg["role"]
         # If roles are the same, we could try merging content, but skipping is simpler for now
         # else: # Optional: merge consecutive messages of the same role
-        #    if valid_messages: valid_messages[-1]["content"] += "\n" + msg["content"]
+        #     if valid_messages: valid_messages[-1]["content"] += "\n" + msg["content"]
 
     if not valid_messages and system_prompt:
-         # If only a system prompt exists, Anthropic needs a dummy user message
-         warn_print("Only system prompt provided; adding empty user message for Anthropic.")
-         valid_messages.append({"role": "user", "content": "..."}) # Or maybe use the system prompt as user prompt?
+        # If only a system prompt exists, Anthropic needs a dummy user message
+        warn_print("Only system prompt provided; adding empty user message for Anthropic.")
+        valid_messages.append({"role": "user", "content": "..."}) # Or maybe use the system prompt as user prompt?
     elif not valid_messages:
-         raise ValueError("No valid user messages found for Anthropic payload")
+        raise ValueError("No valid user messages found for Anthropic payload")
 
 
     payload = {
@@ -174,8 +247,8 @@ def _anthropic_parser(response: Dict[str, Any]) -> Optional[str]:
         # Extract content (Anthropic's structure is different)
         content_blocks = response.get("content", [])
         if not content_blocks:
-             # Handle streaming or alternative formats if necessary in the future
-             return None # Or raise error if content is expected
+            # Handle streaming or alternative formats if necessary in the future
+            return None # Or raise error if content is expected
         # Combine text from potentially multiple content blocks
         full_text = "".join(block.get("text", "") for block in content_blocks if block.get("type") == "text")
         return full_text if full_text else None
@@ -269,7 +342,7 @@ class ApiClient:
             response.raise_for_status() # Raises HTTPError for 4xx/5xx
             # Check if response is empty or not JSON before parsing
             if not response.content:
-                 raise ValueError("API returned an empty response.")
+                raise ValueError("API returned an empty response.")
             try:
                 return response.json()
             except json.JSONDecodeError as json_err:
@@ -294,7 +367,7 @@ class ApiClient:
             # Catch other request issues like connection errors, DNS errors etc.
             raise ConnectionError(f"Network or request setup error: {e}") from e
         except Exception as e: # Catch unexpected errors during the request process
-             raise RuntimeError(f"An unexpected error occurred during the API request: {e}") from e
+            raise RuntimeError(f"An unexpected error occurred during the API request: {e}") from e
 
 
 # --- Core Logic ---
@@ -412,8 +485,8 @@ def set_model_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
 
     provider_type = get_provider_type_for_model(model_name)
     if provider_type not in PROVIDER_TYPES:
-         warn_print(f"Model '{model_name}' maps to unknown provider type '{provider_type}'. Configuration might be incomplete.")
-         # Decide if you want to allow this or return False
+        warn_print(f"Model '{model_name}' maps to unknown provider type '{provider_type}'. Configuration might be incomplete.")
+        # Decide if you want to allow this or return False
 
     config['models'][model_name] = {'api_key': api_key, 'provider_type': provider_type}
     info_print(f"Model '{color_text(model_name, CYAN)}' (type: {provider_type}) configured.")
@@ -600,16 +673,16 @@ def main() -> None:
         'set_model',
         help='Configure a new or existing AI model',
         description='Adds or updates a model configuration using the format <model_name>:<api_key>. The provider type (openai, google, anthropic) is inferred from the model name prefix (e.g., "gpt-", "gemini-", "claude-").'
-        )
+    )
     set_model_parser.add_argument(
         'model_api',
         help='Model name and API key string, e.g., "gpt-4o:sk-..."'
-        )
+    )
     set_model_parser.add_argument(
         '--default', '-d',
         action='store_true',
         help='Set this model as the default for the "ask" command.'
-        )
+    )
     set_model_parser.set_defaults(func=set_model_cmd)
 
     # --- ask command ---
@@ -617,16 +690,16 @@ def main() -> None:
         'ask',
         help='Ask the configured AI a question (reads prompt from args and stdin)',
         description='Sends a prompt to the selected AI model. Reads prompt text from command-line arguments, and if stdin is not a TTY, appends text piped to it.'
-        )
+    )
     ask_parser.add_argument(
         'prompt',
         nargs='*', # 0 or more arguments
         help='The prompt text. If empty and stdin is used, stdin becomes the prompt.'
-        )
+    )
     ask_parser.add_argument(
         '--model', '-m',
         help='Specify the model name to use (overrides the default model).'
-        )
+    )
     ask_parser.set_defaults(func=ask_cmd)
 
     # --- list command ---
@@ -634,18 +707,18 @@ def main() -> None:
         'list',
         help='List all configured models and the default',
         aliases=['ls'] # Add common alias
-        )
+    )
     list_models_parser.set_defaults(func=list_models_cmd)
 
     # --- set_default command ---
     set_default_parser = subparsers.add_parser(
         'set_default',
         help='Set the default model to use for the "ask" command'
-        )
+    )
     set_default_parser.add_argument(
         'model',
         help='Name of the configured model to set as default.'
-        )
+    )
     set_default_parser.set_defaults(func=set_default_cmd)
 
     # --- remove_model command ---
@@ -654,12 +727,21 @@ def main() -> None:
         help='Remove a configured model',
         aliases=['rm'], # Add common alias
         description='Removes the specified model configuration. If the removed model was the default, the default will be unset.'
-        )
+    )
     remove_model_parser.add_argument(
         'model',
         help='Name of the configured model to remove.'
-        )
+    )
     remove_model_parser.set_defaults(func=remove_model_cmd)
+
+    # --- Check for updates ---
+    # Run this before parsing args, so it appears early
+    try:
+        check_for_updates()
+    except Exception as e:
+        # Don't let the update check crash the main script
+        warn_print(f"Update check failed with unexpected error: {e}")
+
 
     # --- Parse arguments ---
     args = parser.parse_args()
