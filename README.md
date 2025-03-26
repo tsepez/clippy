@@ -21,10 +21,10 @@
 ## Installation
 
 1.  **Download the `clippy` script:**
-   -   Just clone this git repo or if you are on Linux/Mac:
+   -   Just clone this git repo:
 
-       ```
-       curl -L -o clippy https://raw.githubusercontent.com/nedn/clippy/main/clippy
+       ```bash
+       git clone https://github.com/nedn/clippy
        ```
 
 2.  **Add to PATH:**
