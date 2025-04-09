@@ -228,6 +228,49 @@ def read_file_content(file_path: Path, root_dir: Path) -> tuple[str, str] | None
          print(f"Warning: Unexpected error reading file {file_path}: {e}", file=sys.stderr)
          return None
 
+def read_files_parallel(files_to_process: list[Path], root_dir: Path, num_workers: int, paths_only: bool) -> list[tuple[str, str]]:
+    """
+    Read files in parallel using a thread pool.
+    Returns a list of tuples (relative_path_str, content).
+    If paths_only is True, content will be empty string.
+    """
+    if paths_only:
+        # In paths-only mode, we don't need to read file contents
+        results = []
+        for file_path in files_to_process:
+            try:
+                relative_path = file_path.relative_to(root_dir)
+                relative_path_str = str(relative_path)
+                results.append((relative_path_str, ""))
+            except Exception as e:
+                print(f"Warning: Could not get relative path for {file_path}: {e}", file=sys.stderr)
+        return results
+
+    # Normal mode - read file contents in parallel
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        # Submit tasks
+        future_to_path = {
+            executor.submit(read_file_content, path, root_dir): path
+            for path in files_to_process
+        }
+
+        # Collect results as they complete
+        processed_count = 0
+        for future in concurrent.futures.as_completed(future_to_path):
+            path = future_to_path[future]
+            try:
+                result = future.result()
+                if result:
+                    results.append(result)
+                processed_count += 1
+                # Optional: Progress indicator
+                print(f"\rProcessed: {processed_count}/{len(files_to_process)}", end="", file=sys.stderr)
+            except Exception as e:
+                print(f"\nError processing file {path}: {e}", file=sys.stderr)
+
+    return results
+
 # --- Main Logic ---
 
 def main():
@@ -258,6 +301,11 @@ def main():
         type=int,
         default=MAX_WORKERS,
         help="Number of parallel workers for reading files."
+    )
+    parser.add_argument(
+        "--paths-only",
+        action="store_true",
+        help="Only output file paths, without their content."
     )
 
     args = parser.parse_args()
@@ -305,29 +353,7 @@ def main():
     print(f"Processing {len(files_to_process)} files...", file=sys.stderr)
 
     # --- Parallel Reading ---
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        # Submit tasks
-        future_to_path = {
-            executor.submit(read_file_content, path, root_dir): path
-            for path in files_to_process
-        }
-
-        # Collect results as they complete
-        processed_count = 0
-        for future in concurrent.futures.as_completed(future_to_path):
-            path = future_to_path[future]
-            try:
-                result = future.result()
-                if result:
-                    results.append(result)
-                processed_count += 1
-                # Optional: Progress indicator
-                print(f"\rProcessed: {processed_count}/{len(files_to_process)}", end="", file=sys.stderr)
-
-            except Exception as e:
-                print(f"\nError processing file {path}: {e}", file=sys.stderr)
-
+    results = read_files_parallel(files_to_process, root_dir, num_workers, args.paths_only)
     print("\nReading complete.", file=sys.stderr) # Newline after progress indicator
 
     # --- Sort results by relative path (important as futures may complete out of order) ---
@@ -360,9 +386,6 @@ def main():
             output_target.write(file_info)
             output_target.write(content)
             total_tokens += count_tokens(file_info) + count_tokens(content)
-            # Add a newline if content doesn't end with one for better separation
-            if content and not content.endswith('\n'):
-                 output_target.write('\n')
             output_target.flush() # Flush periodically for long outputs
             file_count += 1
     except Exception as e:
