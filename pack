@@ -16,12 +16,12 @@ usage() {
   echo "Usage: $0 <directory> [file_pattern ...]" >&2
   echo "  <directory>: The directory to search recursively." >&2
   echo "  [file_pattern ...]: Optional shell patterns (e.g., '*.txt', 'main.*')." >&2
-  echo "                      If no patterns are given, all non-binary files (excluding .git) are included." >&2
+  echo "                      If no patterns are given, all non-binary, non-hidden files are included." >&2
   echo >&2
   echo "Output:" >&2
   echo "  If stdout is a terminal, combines content into a temporary file and prints its path." >&2
   echo "  If stdout is piped or redirected, prints the combined content directly to stdout." >&2
-  echo "  Excludes binary files and files within any '.git' directory." >&2
+  echo "  Excludes binary files, hidden files (starting with '.'), and files within hidden directories." >&2
   exit 1
 }
 
@@ -76,37 +76,64 @@ fi
 
 
 # --- Normalize Target Directory Path ---
-TARGET_DIR_CLEAN="${TARGET_DIR%/}"
+# Using realpath for robustness, fall back to simple cleaning if not available
+if command -v realpath &> /dev/null; then
+    TARGET_DIR_CLEAN=$(realpath "$TARGET_DIR")
+else
+    TARGET_DIR_CLEAN="${TARGET_DIR%/}" # Basic cleanup if realpath isn't there
+fi
 
 
 # --- Build find command arguments ---
 find_args=("$TARGET_DIR_CLEAN")
-find_args+=( \( -path '*/.git' -prune \) -o )
 
+# --- Pruning rules FIRST ---
+# Prune any directory starting with '.' (e.g., .git, .cache, .vscode)
+# Using -path '*/.*' ensures we match hidden dirs at any depth relative to start
+# Using -name '.*' with -prune would only prune hidden dirs directly under TARGET_DIR_CLEAN
+find_args+=( \( -name '.?*' -type d \) -prune ) # Match hidden dirs, prune them. Using .?* avoids matching '.' itself
+find_args+=( -o ) # OR, proceed with the checks below
+
+# --- Selection Rules ---
+# Group the selection criteria
+find_args+=( \( )
+
+# Rule 1: Must NOT be a hidden file (basename starts with '.')
+# We check this again here for files not inside pruned directories
+find_args+=( -not -name '.?*' )
+
+# Rule 2: Apply user-provided patterns if any
 if [ "$#" -gt 0 ]; then
-    find_args+=( \( )
+    find_args+=( -a \( ) # AND ( start pattern group
     first_pattern=true
     for pattern in "$@"; do
         if [ "$first_pattern" = false ]; then
-            find_args+=( -o )
+            find_args+=( -o ) # OR between patterns
         fi
         find_args+=( -name "$pattern" )
         first_pattern=false
     done
-    find_args+=( \) )
-    find_args+=( -a )
+    find_args+=( \) ) # end pattern group )
 fi
 
-find_args+=( -type f -print0 )
+# Rule 3: Must be a regular file
+find_args+=( -a -type f ) # AND must be a file
+
+# End the selection criteria group
+find_args+=( \) )
+
+# Action: Print the found filenames null-terminated
+find_args+=( -print0 )
 
 # --- Inform User (Redirected to stderr) ---
 echo "Searching in: '$TARGET_DIR_CLEAN'" >&2
 if [ "$#" -gt 0 ]; then
     echo "Matching patterns: $@" >&2
 else
-    echo "Matching all non-binary files (no specific patterns given)." >&2
+    echo "Matching all non-binary, non-hidden files (no specific patterns given)." >&2
 fi
-echo "Ignoring files in '.git' directories and binary files." >&2
+echo "Ignoring hidden files (starting with '.') and contents of hidden directories." >&2
+echo "Ignoring binary files." >&2
 if [ -n "$TEMP_DIR" ]; then # Only show temp file path if we created one
     echo "Temporary file will be: $OUTPUT_TARGET" >&2
 fi
@@ -115,6 +142,7 @@ echo "Processing..." >&2
 # --- Process Files ---
 processed_count=0
 skipped_binary_count=0
+skipped_hidden_count=0 # Keep track for info, although find should exclude them
 
 # Define where to send the combined content based on the earlier check
 # If OUTPUT_TARGET is /dev/stdout, commands write directly to stdout.
@@ -123,27 +151,41 @@ output_command() {
     if [ "$OUTPUT_TARGET" = "/dev/stdout" ]; then
         cat # Read from stdin (pipe), write to stdout
     else
+        # Use tee to write to file *and* potentially show progress/debug on stderr if needed
+        # For now, just append silently. Use `tee -a "$OUTPUT_TARGET"` to also see output.
         cat >> "$OUTPUT_TARGET" # Read from stdin (pipe), append to file
     fi
 }
 
+# Use process substitution to feed find results into the loop
 while IFS= read -r -d $'\0' file; do
+    # Basic check for hidden files/paths - find should handle this, but as a safeguard/debug
+    if [[ "$file" == *'/.?*'* || "$(basename "$file")" == .?* ]]; then
+       # echo "DEBUG: Skipping hidden file/path that slipped through find: $file" >&2
+       ((skipped_hidden_count++))
+       continue
+    fi
+
     mime_type=$(file --mime-type -b "$file")
 
-    if [[ ! "$mime_type" == text/* && ! "$mime_type" == "inode/x-empty" ]]; then
-        # Uncomment the following line for debugging binary skips
-        # echo "  Skipping binary file: $file (MIME: $mime_type)" >&2
+    # Skip non-text files (including true binary files, directories, symlinks etc. caught here)
+    # Allow empty files as they are technically text.
+    if [[ ! "$mime_type" =~ ^text/.* ]] && [[ "$mime_type" != "inode/x-empty" ]]; then
+        # echo "  Skipping non-text file: $file (MIME: $mime_type)" >&2
         ((skipped_binary_count++))
         continue
     fi
 
+    # Make the path relative to the original TARGET_DIR for clearer output headers
+    # Handle cases where TARGET_DIR might be '.' or have trailing slashes
     relative_path="${file#"$TARGET_DIR_CLEAN"/}"
+    # If TARGET_DIR_CLEAN was '/', the above might leave a leading /
+    relative_path="${relative_path#./}" # Clean up leading ./ if TARGET_DIR was .
 
     # Add header, content, and blank line, piping through output_command
     {
-        echo ">>>> $relative_path"
+        echo ">>>> File: $relative_path" # Added "File:" for clarity
         cat "$file"
-        echo ""
     } | output_command
 
     ((processed_count++))
@@ -154,18 +196,32 @@ done < <(find "${find_args[@]}")
 echo "Done." >&2
 echo "Processed $processed_count file(s)." >&2
 if [ "$skipped_binary_count" -gt 0 ]; then
-    echo "Skipped $skipped_binary_count binary file(s)." >&2
+    echo "Skipped $skipped_binary_count non-text file(s)." >&2
+fi
+# Include the count of hidden files skipped by the loop safeguard, though find should do the work
+if [ "$skipped_hidden_count" -gt 0 ]; then
+    echo "Skipped $skipped_hidden_count hidden file(s)/path(s) (safeguard check)." >&2
 fi
 
 # --- Final Output ---
 if [ -n "$TEMP_DIR" ]; then
     # If we created a temp file (outputting to terminal),
     # print the path of the temp file to standard output.
-    echo "$OUTPUT_TARGET"
+    if [ "$processed_count" -gt 0 ]; then
+      echo "Combined content is in: $OUTPUT_TARGET"
+    else
+      echo "No files processed. Temporary file is empty: $OUTPUT_TARGET" >&2
+      # Optional: Remove empty temp dir/file if nothing was processed
+      # rm -rf "$TEMP_DIR"
+      # exit 0 # Or exit with a different code?
+    fi
 else
     # If we wrote to stdout directly, there's nothing more to print here.
     # The content has already been streamed.
     : # No-op
 fi
+
+# Clean up temp dir if created (optional, OS usually handles /tmp)
+# trap 'rm -rf "$TEMP_DIR"' EXIT # Add this near the top if you want automatic cleanup
 
 exit 0
