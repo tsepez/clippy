@@ -107,12 +107,12 @@ ffmpeg -i input.mp4 -ss 0 -to $(ffprobe -v error -show_entries format=duration -
 ```
 ````
 
-If you install the [yek utility](https://github.com/bodo-run/yek), then you can
-do the following:
+You can use the (`pack`)[./pack] script in this folder to do the folllowing in
+Unix-based OSes.
 
 ```bash
 $ git clone https://github.com/karpathy/cryptos
-$ yek cryptos/ | clippy ask "Give me a high level overview of this project"
+$ pack cryptos/ | clippy ask "Give me a high level overview of this project"
 Sending prompt to model 'gemini-2.5-pro-exp-03-25'...
 
 AI Response:
