@@ -72,7 +72,7 @@ $ clippy set_model gpt-4o:<openai-api-key>
 Model 'gpt-4o' set successfully.
 Model 'gpt-4o' set as default.
 
-$ clippy list_models
+$ clippy ls
 
 Configured Models:
   gpt-4o
