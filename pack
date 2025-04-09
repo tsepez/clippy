@@ -153,12 +153,13 @@ def is_likely_non_text(file_path: Path) -> bool:
         return True # Default to treating as non-text on unexpected errors
     
 
-def should_ignore(file_path: Path, root_dir: Path, pattern: str) -> bool:
+def should_ignore(file_path: Path, root_dir: Path, include_pattern: str, exclude_pattern: str) -> bool:
     """
     Check if a file should be ignored based on defined rules:
     - Hidden file (starts with '.')
     - Inside a hidden directory (any parent part starts with '.')
-    - Does not match the glob pattern.
+    - Does not match the include pattern
+    - Matches the exclude pattern
     - Is likely binary.
     """
     # 1. Check if it's actually a file (resolve symlinks first)
@@ -177,13 +178,16 @@ def should_ignore(file_path: Path, root_dir: Path, pattern: str) -> bool:
         relative_path_str = str(relative_path)
     except ValueError:
         # Should not happen if file_path is within root_dir, but handle defensively
-         print(f"Warning: Could not get relative path for {file_path} based on {root_dir}", file=sys.stderr)
-         return True
+        print(f"Warning: Could not get relative path for {file_path} based on {root_dir}", file=sys.stderr)
+        return True
 
-
-    # 2. Check glob pattern first (often the most selective)
-    if pattern != '*' and not fnmatch.fnmatch(relative_path_str, pattern) and not fnmatch.fnmatch(file_path.name, pattern):
-         # Check against both relative path and just the filename
+    # 2. Check glob patterns
+    # First check exclude pattern (if specified)
+    if exclude_pattern and (fnmatch.fnmatch(relative_path_str, exclude_pattern) or fnmatch.fnmatch(file_path.name, exclude_pattern)):
+        return True
+    
+    # Then check include pattern
+    if include_pattern != '*' and not fnmatch.fnmatch(relative_path_str, include_pattern) and not fnmatch.fnmatch(file_path.name, include_pattern):
         return True
 
     # 3. Check for hidden file/directory
@@ -193,7 +197,7 @@ def should_ignore(file_path: Path, root_dir: Path, pattern: str) -> bool:
     # Check any parent directory component
     # Use relative_path.parts to avoid checking parts outside the root_dir
     if any(part.startswith('.') for part in relative_path.parts[:-1]): # Check parent parts
-         return True
+        return True
 
     # 4. Check for binary content (can be slow, do last)
     if is_likely_non_text(file_path):
@@ -238,8 +242,14 @@ def main():
         help="The directory to scan recursively. Defaults to the current directory."
     )
     parser.add_argument(
-        "-p", "--pattern",
+        "-i", "--include",
         default="*",
+        help="Optional file glob pattern (e.g., '*.py', 'src/**/test_*.py'). "
+             "Filters files based on their relative path within the target directory."
+    )
+    parser.add_argument(
+        "-e", "--exclude",
+        default="",
         help="Optional file glob pattern (e.g., '*.py', 'src/**/test_*.py'). "
              "Filters files based on their relative path within the target directory."
     )
@@ -253,7 +263,8 @@ def main():
     args = parser.parse_args()
 
     root_dir = Path(args.directory).resolve() # Get absolute path
-    file_pattern = args.pattern
+    include_pattern = args.include
+    exclude_pattern = args.exclude
     num_workers = args.workers
 
     if not root_dir.is_dir():
@@ -261,7 +272,8 @@ def main():
         sys.exit(1)
 
     print(f"Scanning directory: {root_dir}", file=sys.stderr)
-    print(f"Using file pattern: {file_pattern}", file=sys.stderr)
+    print(f"Using include pattern: {include_pattern}", file=sys.stderr)
+    print(f"Using exclude pattern: {exclude_pattern}", file=sys.stderr)
     print(f"Ignoring hidden files/directories and binary files.", file=sys.stderr)
 
     # --- File Discovery ---
@@ -284,7 +296,7 @@ def main():
     print(f"Found {len(all_files)} potential items. Filtering...", file=sys.stderr)
     files_to_process = []
     for file_path in all_files:
-        if not should_ignore(file_path, root_dir, file_pattern):
+        if not should_ignore(file_path, root_dir, include_pattern, exclude_pattern):
             files_to_process.append(file_path)
 
     # Sort files for consistent output order
