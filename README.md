@@ -107,8 +107,7 @@ ffmpeg -i input.mp4 -ss 0 -to $(ffprobe -v error -show_entries format=duration -
 ```
 ````
 
-You can use the [`pack`](pack) script in this folder to do the folllowing in
-Unix-based OSes.
+You can use the [`pack`](pack) script in this folder to do the folllowing:
 
 ```bash
 $ git clone https://github.com/karpathy/cryptos
