@@ -1,227 +1,247 @@
-#!/bin/bash
+#!/usr/bin/env python3
 
-# Script to combine content of text files in a directory recursively.
-# Usage: ./combine_files.sh <directory> [pattern1] [pattern2] ...
-# Example: ./combine_files.sh . '*.rs' '*.md'
-# Example: ./combine_files.sh /path/to/project
-# Example: ./combine_files.sh . | less
-# Example: ./combine_files.sh . > combined.txt
+import argparse
+import sys
+import os
+from pathlib import Path
+import concurrent.futures
+import fnmatch  # For glob pattern matching on paths
 
 # --- Configuration ---
-OUTPUT_FILENAME="combined_content.txt" # Only used when outputting to terminal
+DEFAULT_OUTPUT_FILENAME = "output.txt"
+MAX_WORKERS = os.cpu_count() or 4 # Use CPU count or default to 4 workers
+READ_CHUNK_SIZE = 1024 * 1024 # Read in 1MB chunks for binary check
 
-# --- Function: Print usage ---
-usage() {
-  # Print usage message to stderr
-  echo "Usage: $0 <directory> [file_pattern ...]" >&2
-  echo "  <directory>: The directory to search recursively." >&2
-  echo "  [file_pattern ...]: Optional shell patterns (e.g., '*.txt', 'main.*')." >&2
-  echo "                      If no patterns are given, all non-binary, non-hidden files are included." >&2
-  echo >&2
-  echo "Output:" >&2
-  echo "  If stdout is a terminal, combines content into a temporary file and prints its path." >&2
-  echo "  If stdout is piped or redirected, prints the combined content directly to stdout." >&2
-  echo "  Excludes binary files, hidden files (starting with '.'), and files within hidden directories." >&2
-  exit 1
-}
+# --- Helper Functions ---
 
-# --- Argument Validation ---
-if [ "$#" -lt 1 ]; then
-  echo "Error: Directory argument is missing." >&2
-  usage
-fi
+def is_likely_binary(file_path: Path) -> bool:
+    """
+    Check if a file is likely binary.
+    Reads a chunk and checks for null bytes. More robust checks exist,
+    but this is a common and often sufficient heuristic.
+    Returns True if likely binary, False otherwise.
+    Handles potential read errors.
+    """
+    try:
+        with file_path.open('rb') as f:
+            chunk = f.read(READ_CHUNK_SIZE)
+            return b'\0' in chunk
+    except OSError as e:
+        print(f"Warning: Could not read {file_path} to check for binary content: {e}", file=sys.stderr)
+        return True # Treat as binary if we can't read it properly
+    except Exception as e:
+        print(f"Warning: Unexpected error checking binary status of {file_path}: {e}", file=sys.stderr)
+        return True
 
-TARGET_DIR="$1"
-shift # Remove directory from arguments, patterns remain in $@
+def should_ignore(file_path: Path, root_dir: Path, pattern: str) -> bool:
+    """
+    Check if a file should be ignored based on defined rules:
+    - Hidden file (starts with '.')
+    - Inside a hidden directory (any parent part starts with '.')
+    - Does not match the glob pattern.
+    - Is likely binary.
+    """
+    # 1. Check if it's actually a file (resolve symlinks first)
+    try:
+        if not file_path.is_file():
+            # This might happen with broken symlinks during the walk
+            return True
+    except OSError as e:
+        # Could be a permission error or other issue accessing the file type
+        print(f"Warning: Could not determine if {file_path} is a file: {e}", file=sys.stderr)
+        return True # Ignore if we can't verify it's a file
 
-if [ ! -d "$TARGET_DIR" ]; then
-  echo "Error: '$TARGET_DIR' is not a valid directory." >&2
-  exit 1
-fi
-
-# --- Dependency Check ---
-if ! command -v file &> /dev/null; then
-    echo "Error: 'file' command not found. Please install it (usually part of 'file' package)." >&2
-    exit 1
-fi
-if ! command -v mktemp &> /dev/null && [ -t 1 ]; then
-    # mktemp is only strictly needed if we're writing to a temp file (terminal output)
-    echo "Error: 'mktemp' command not found. Cannot create secure temporary directory for terminal output." >&2
-    exit 1
-fi
-
-
-# --- Determine Output Method ---
-OUTPUT_TARGET="" # Will be stdout or a temporary file path
-TEMP_DIR=""      # Store temp dir path if created
-
-# Check if stdout is connected to a terminal
-if [ -t 1 ]; then
-  # Outputting to terminal: Use a temporary file
-  echo "Outputting to terminal. Creating temporary file..." >&2
-  TEMP_DIR=$(mktemp -d)
-  if [ ! -d "$TEMP_DIR" ]; then
-      echo "Error: Could not create temporary directory." >&2
-      exit 1
-  fi
-  OUTPUT_TARGET="$TEMP_DIR/$OUTPUT_FILENAME"
-  # Ensure output file is empty/created before starting
-  : > "$OUTPUT_TARGET" || { echo "Error: Could not create or clear output file: $OUTPUT_TARGET" >&2; rm -rf "$TEMP_DIR"; exit 1; }
-else
-  # Outputting to pipe/redirect: Use stdout
-  # No file needs to be created here. Informational messages go to stderr.
-  echo "Outputting directly to stdout (pipe or redirection detected)." >&2
-  OUTPUT_TARGET="/dev/stdout" # Conceptually, we're writing to stdout
-fi
+    # Use relative path for hidden checks and pattern matching
+    try:
+        relative_path = file_path.relative_to(root_dir)
+        relative_path_str = str(relative_path)
+    except ValueError:
+        # Should not happen if file_path is within root_dir, but handle defensively
+         print(f"Warning: Could not get relative path for {file_path} based on {root_dir}", file=sys.stderr)
+         return True
 
 
-# --- Normalize Target Directory Path ---
-# Using realpath for robustness, fall back to simple cleaning if not available
-if command -v realpath &> /dev/null; then
-    TARGET_DIR_CLEAN=$(realpath "$TARGET_DIR")
-else
-    TARGET_DIR_CLEAN="${TARGET_DIR%/}" # Basic cleanup if realpath isn't there
-fi
+    # 2. Check glob pattern first (often the most selective)
+    if pattern != '*' and not fnmatch.fnmatch(relative_path_str, pattern) and not fnmatch.fnmatch(file_path.name, pattern):
+         # Check against both relative path and just the filename
+        return True
+
+    # 3. Check for hidden file/directory
+    # Check filename itself
+    if file_path.name.startswith('.'):
+        return True
+    # Check any parent directory component
+    # Use relative_path.parts to avoid checking parts outside the root_dir
+    if any(part.startswith('.') for part in relative_path.parts[:-1]): # Check parent parts
+         return True
+
+    # 4. Check for binary content (can be slow, do last)
+    if is_likely_binary(file_path):
+        print(f"Info: Skipping likely binary file: {relative_path_str}", file=sys.stderr)
+        return True
+
+    return False # If none of the ignore conditions match
+
+def read_file_content(file_path: Path, root_dir: Path) -> tuple[str, str] | None:
+    """
+    Reads the content of a text file.
+    Returns a tuple (relative_path_str, content) or None if reading fails.
+    """
+    try:
+        relative_path = file_path.relative_to(root_dir)
+        relative_path_str = str(relative_path)
+        with file_path.open('r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        return (relative_path_str, content)
+    except OSError as e:
+        print(f"Warning: Could not read file {file_path}: {e}", file=sys.stderr)
+        return None
+    except UnicodeDecodeError as e:
+        # Should ideally be caught by is_likely_binary, but as a fallback
+        print(f"Warning: Skipping file with encoding issues {file_path}: {e}", file=sys.stderr)
+        return None
+    except Exception as e:
+         print(f"Warning: Unexpected error reading file {file_path}: {e}", file=sys.stderr)
+         return None
+
+# --- Main Logic ---
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Recursively combine content of text files in a directory.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        "directory",
+        nargs="?",
+        default=".",
+        help="The directory to scan recursively. Defaults to the current directory."
+    )
+    parser.add_argument(
+        "-p", "--pattern",
+        default="*",
+        help="Optional file glob pattern (e.g., '*.py', 'src/**/test_*.py'). "
+             "Filters files based on their relative path within the target directory."
+    )
+    parser.add_argument(
+        "-w", "--workers",
+        type=int,
+        default=MAX_WORKERS,
+        help="Number of parallel workers for reading files."
+    )
+
+    args = parser.parse_args()
+
+    root_dir = Path(args.directory).resolve() # Get absolute path
+    file_pattern = args.pattern
+    num_workers = args.workers
+
+    if not root_dir.is_dir():
+        print(f"Error: Directory not found: {args.directory}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Scanning directory: {root_dir}", file=sys.stderr)
+    print(f"Using file pattern: {file_pattern}", file=sys.stderr)
+    print(f"Ignoring hidden files/directories and binary files.", file=sys.stderr)
+
+    # --- File Discovery ---
+    # Use rglob which handles recursion naturally.
+    # We collect all potential paths first.
+    all_files = []
+    try:
+        # Using generator directly is fine here as filtering happens next
+        file_iterator = root_dir.rglob('*')
+        all_files = list(file_iterator)
+    except PermissionError as e:
+         print(f"Warning: Permission denied during directory scan: {e}", file=sys.stderr)
+         # Continue with files found so far
+    except Exception as e:
+         print(f"Error during directory scan: {e}", file=sys.stderr)
+         sys.exit(1)
 
 
-# --- Build find command arguments ---
-find_args=("$TARGET_DIR_CLEAN")
+    # --- Filtering ---
+    print(f"Found {len(all_files)} potential items. Filtering...", file=sys.stderr)
+    files_to_process = []
+    for file_path in all_files:
+        if not should_ignore(file_path, root_dir, file_pattern):
+            files_to_process.append(file_path)
 
-# --- Pruning rules FIRST ---
-# Prune any directory starting with '.' (e.g., .git, .cache, .vscode)
-# Using -path '*/.*' ensures we match hidden dirs at any depth relative to start
-# Using -name '.*' with -prune would only prune hidden dirs directly under TARGET_DIR_CLEAN
-find_args+=( \( -name '.?*' -type d \) -prune ) # Match hidden dirs, prune them. Using .?* avoids matching '.' itself
-find_args+=( -o ) # OR, proceed with the checks below
+    # Sort files for consistent output order
+    files_to_process.sort()
 
-# --- Selection Rules ---
-# Group the selection criteria
-find_args+=( \( )
+    print(f"Processing {len(files_to_process)} files...", file=sys.stderr)
 
-# Rule 1: Must NOT be a hidden file (basename starts with '.')
-# We check this again here for files not inside pruned directories
-find_args+=( -not -name '.?*' )
+    # --- Parallel Reading ---
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        # Submit tasks
+        future_to_path = {
+            executor.submit(read_file_content, path, root_dir): path
+            for path in files_to_process
+        }
 
-# Rule 2: Apply user-provided patterns if any
-if [ "$#" -gt 0 ]; then
-    find_args+=( -a \( ) # AND ( start pattern group
-    first_pattern=true
-    for pattern in "$@"; do
-        if [ "$first_pattern" = false ]; then
-            find_args+=( -o ) # OR between patterns
-        fi
-        find_args+=( -name "$pattern" )
-        first_pattern=false
-    done
-    find_args+=( \) ) # end pattern group )
-fi
+        # Collect results as they complete
+        processed_count = 0
+        for future in concurrent.futures.as_completed(future_to_path):
+            path = future_to_path[future]
+            try:
+                result = future.result()
+                if result:
+                    results.append(result)
+                processed_count += 1
+                # Optional: Progress indicator
+                print(f"\rProcessed: {processed_count}/{len(files_to_process)}", end="", file=sys.stderr)
 
-# Rule 3: Must be a regular file
-find_args+=( -a -type f ) # AND must be a file
+            except Exception as e:
+                print(f"\nError processing file {path}: {e}", file=sys.stderr)
 
-# End the selection criteria group
-find_args+=( \) )
+    print("\nReading complete.", file=sys.stderr) # Newline after progress indicator
 
-# Action: Print the found filenames null-terminated
-find_args+=( -print0 )
+    # --- Sort results by relative path (important as futures may complete out of order) ---
+    results.sort(key=lambda item: item[0]) # Sort by relative_path_str
 
-# --- Inform User (Redirected to stderr) ---
-echo "Searching in: '$TARGET_DIR_CLEAN'" >&2
-if [ "$#" -gt 0 ]; then
-    echo "Matching patterns: $@" >&2
-else
-    echo "Matching all non-binary, non-hidden files (no specific patterns given)." >&2
-fi
-echo "Ignoring hidden files (starting with '.') and contents of hidden directories." >&2
-echo "Ignoring binary files." >&2
-if [ -n "$TEMP_DIR" ]; then # Only show temp file path if we created one
-    echo "Temporary file will be: $OUTPUT_TARGET" >&2
-fi
-echo "Processing..." >&2
+    # --- Determine Output Destination ---
+    output_target = None
+    using_stdout = False
+    if sys.stdout.isatty():
+        # Output is to a terminal, write to default file
+        output_filename = DEFAULT_OUTPUT_FILENAME
+        print(f"Outputting to file: {output_filename}", file=sys.stderr)
+        try:
+            output_target = open(output_filename, 'w', encoding='utf-8')
+        except OSError as e:
+            print(f"Error: Could not open output file {output_filename}: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Output is piped or redirected, write to stdout
+        print(f"Outputting to stdout", file=sys.stderr)
+        output_target = sys.stdout
+        using_stdout = True
 
-# --- Process Files ---
-processed_count=0
-skipped_binary_count=0
-skipped_hidden_count=0 # Keep track for info, although find should exclude them
+    # --- Writing Output ---
+    try:
+        file_count = 0
+        for relative_path, content in results:
+            output_target.write(f">>>> {relative_path}\n")
+            output_target.write(content)
+            # Add a newline if content doesn't end with one for better separation
+            if content and not content.endswith('\n'):
+                 output_target.write('\n')
+            output_target.flush() # Flush periodically for long outputs
+            file_count += 1
+    except Exception as e:
+         print(f"\nError writing output: {e}", file=sys.stderr)
+         # Avoid traceback flood if stdout pipe is broken
+         if isinstance(e, BrokenPipeError):
+             sys.exit(0) # Exit cleanly if pipe is broken
+         else:
+             sys.exit(1)
+    finally:
+        if output_target and not using_stdout:
+            output_target.close()
 
-# Define where to send the combined content based on the earlier check
-# If OUTPUT_TARGET is /dev/stdout, commands write directly to stdout.
-# If OUTPUT_TARGET is a file path, commands append (>>) to that file.
-output_command() {
-    if [ "$OUTPUT_TARGET" = "/dev/stdout" ]; then
-        cat # Read from stdin (pipe), write to stdout
-    else
-        # Use tee to write to file *and* potentially show progress/debug on stderr if needed
-        # For now, just append silently. Use `tee -a "$OUTPUT_TARGET"` to also see output.
-        cat >> "$OUTPUT_TARGET" # Read from stdin (pipe), append to file
-    fi
-}
+    print(f"\nSuccessfully combined content of {file_count} files.", file=sys.stderr)
 
-# Use process substitution to feed find results into the loop
-while IFS= read -r -d $'\0' file; do
-    # Basic check for hidden files/paths - find should handle this, but as a safeguard/debug
-    if [[ "$file" == *'/.?*'* || "$(basename "$file")" == .?* ]]; then
-       # echo "DEBUG: Skipping hidden file/path that slipped through find: $file" >&2
-       ((skipped_hidden_count++))
-       continue
-    fi
-
-    mime_type=$(file --mime-type -b "$file")
-
-    # Skip non-text files (including true binary files, directories, symlinks etc. caught here)
-    # Allow empty files as they are technically text.
-    if [[ ! "$mime_type" =~ ^text/.* ]] && [[ "$mime_type" != "inode/x-empty" ]]; then
-        # echo "  Skipping non-text file: $file (MIME: $mime_type)" >&2
-        ((skipped_binary_count++))
-        continue
-    fi
-
-    # Make the path relative to the original TARGET_DIR for clearer output headers
-    # Handle cases where TARGET_DIR might be '.' or have trailing slashes
-    relative_path="${file#"$TARGET_DIR_CLEAN"/}"
-    # If TARGET_DIR_CLEAN was '/', the above might leave a leading /
-    relative_path="${relative_path#./}" # Clean up leading ./ if TARGET_DIR was .
-
-    # Add header, content, and blank line, piping through output_command
-    {
-        echo ">>>> File: $relative_path" # Added "File:" for clarity
-        cat "$file"
-    } | output_command
-
-    ((processed_count++))
-
-done < <(find "${find_args[@]}")
-
-# --- Completion Message (Redirected to stderr) ---
-echo "Done." >&2
-echo "Processed $processed_count file(s)." >&2
-if [ "$skipped_binary_count" -gt 0 ]; then
-    echo "Skipped $skipped_binary_count non-text file(s)." >&2
-fi
-# Include the count of hidden files skipped by the loop safeguard, though find should do the work
-if [ "$skipped_hidden_count" -gt 0 ]; then
-    echo "Skipped $skipped_hidden_count hidden file(s)/path(s) (safeguard check)." >&2
-fi
-
-# --- Final Output ---
-if [ -n "$TEMP_DIR" ]; then
-    # If we created a temp file (outputting to terminal),
-    # print the path of the temp file to standard output.
-    if [ "$processed_count" -gt 0 ]; then
-      echo "Combined content is in: $OUTPUT_TARGET"
-    else
-      echo "No files processed. Temporary file is empty: $OUTPUT_TARGET" >&2
-      # Optional: Remove empty temp dir/file if nothing was processed
-      # rm -rf "$TEMP_DIR"
-      # exit 0 # Or exit with a different code?
-    fi
-else
-    # If we wrote to stdout directly, there's nothing more to print here.
-    # The content has already been streamed.
-    : # No-op
-fi
-
-# Clean up temp dir if created (optional, OS usually handles /tmp)
-# trap 'rm -rf "$TEMP_DIR"' EXIT # Add this near the top if you want automatic cleanup
-
-exit 0
+if __name__ == "__main__":
+    main()
