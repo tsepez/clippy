@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+"""
+This script recursively combines the content of text files in a directory.
+It uses a thread pool to read files in parallel, which can significantly speed up
+the process for large directories.
+
+The script supports optional file glob patterns to filter which files are processed.
+
+The output is written to a file by default, but can be piped to stdout.
+"""
 
 import argparse
 import sys
@@ -8,6 +17,12 @@ from pathlib import Path
 import concurrent.futures
 import fnmatch  # For glob pattern matching on paths
 
+try:
+    import tiktoken
+except ImportError:
+    print("Warning: tiktoken is not installed, total token count will be disabled. Install it with 'pip install tiktoken'", file=sys.stderr)
+    tiktoken = None
+
 # --- Configuration ---
 DEFAULT_OUTPUT_FILENAME = "output.txt"
 MAX_WORKERS = os.cpu_count() or 4 # Use CPU count or default to 4 workers
@@ -15,24 +30,128 @@ READ_CHUNK_SIZE = 1024 * 1024 # Read in 1MB chunks for binary check
 
 # --- Helper Functions ---
 
-def is_likely_binary(file_path: Path) -> bool:
+# Define a reasonable chunk size for reading
+READ_CHUNK_SIZE = 1024  # Read 1KB chunk
+
+# Common non-text file extensions (lowercase)
+# This list is not exhaustive but covers many common binary formats.
+NON_TEXT_EXTENSIONS = [
+    # Images
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.ico',
+    '.heic', '.heif',
+
+    # Audio
+    '.mp3', '.wav', '.aac', '.ogg', '.flac', '.m4a', '.wma', '.aiff',
+
+    # Video
+    '.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.mpeg', '.mpg',
+
+    # Compressed Archives
+    '.zip', '.rar', '.tar', '.gz', '.bz2', '.7z', '.xz', '.iso', '.dmg',
+
+    # Executables & Libraries
+    '.exe', '.dll', '.so', '.dylib', '.app', '.msi',
+
+    # Compiled Code / Object Files
+    '.o', '.obj', '.class', '.pyc', '.pyo', '.wasm',
+
+    # Documents (often binary or complex structure)
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.odt', '.ods', '.odp', # OpenDocument formats
+
+    # Databases
+    '.sqlite', '.db', '.mdb', '.accdb', '.dat', # .dat is ambiguous but often binary
+
+    # Fonts
+    '.ttf', '.otf', '.woff', '.woff2', '.eot',
+
+    # Other common binary/non-text data
+    '.bin', '.dat', # Reiterate .dat as it's common
+    '.pickle', '.pkl', # Python serialized objects
+    '.joblib',         # Scikit-learn models
+    '.h5', '.hdf5',     # Hierarchical Data Format
+    '.parquet',        # Columnar storage format
+    '.avro',           # Data serialization system
+    '.feather',        # Fast, lightweight file format
+    '.arrow',          # Apache Arrow format
+    '.model',          # Generic model files
+    '.pt', '.pth',     # PyTorch models
+    '.pb',             # Protocol Buffers (often used for ML models)
+    '.onnx',           # Open Neural Network Exchange
+    '.sav',            # SPSS data file
+    '.dta',            # Stata data file
+    '.idx',            # Often index files (binary)
+    '.pack',           # Git pack files
+    '.deb', '.rpm',    # Package manager files
+    '.jar',            # Java archives
+    '.war', '.ear',    # Java web/enterprise archives
+    '.swf',            # Adobe Flash (obsolete but might be encountered)
+    '.psd',            # Adobe Photoshop
+    '.ai',             # Adobe Illustrator (often PDF compatible but proprietary)
+    '.indd',           # Adobe InDesign
+    '.blend',          # Blender 3D files
+    '.dwg', '.dxf',    # CAD files (DXF can be text, but often complex)
+    '.skp',            # SketchUp files
+    '.stl',            # Stereolithography (3D printing)
+    '.obj',            # Wavefront OBJ (can be text, but often large/complex geometry data)
+    '.fbx',            # Autodesk FBX (3D models)
+    '.gltf', '.glb',    # GL Transmission Format (glb is binary)
+    '.swp',            # Vim swap file (binary)
+    '.lock',           # Often empty or contain minimal binary data
+]
+
+# Convert to a set for slightly faster lookups, though for this size, a list is fine too.
+NON_TEXT_EXTENSIONS_SET = set(NON_TEXT_EXTENSIONS)
+
+
+def count_tokens(text: str) -> int:
+    """Count the number of tokens in a text string."""
+    if tiktoken is None:
+        return -1 # Return -1 if tiktoken is not installed
+    encoding = tiktoken.get_encoding("cl100k_base")
+    return len(encoding.encode(text))
+
+
+def is_likely_non_text(file_path: Path) -> bool:
     """
-    Check if a file is likely binary.
-    Reads a chunk and checks for null bytes. More robust checks exist,
-    but this is a common and often sufficient heuristic.
-    Returns True if likely binary, False otherwise.
-    Handles potential read errors.
+    Check if a file is likely non-text (binary).
+
+    First checks the file extension against a list of known non-text types.
+    If the extension doesn't match, it reads a small chunk of the file
+    and checks for the presence of null bytes (a common indicator of binary data).
+
+    Returns True if the file is likely non-text, False otherwise.
+    Handles potential read errors gracefully.
     """
+    # Check extension of file (case-insensitive)
+    if file_path.suffix.lower() in NON_TEXT_EXTENSIONS_SET:
+        return True
+
+    # If extension isn't conclusive, check content for null bytes
     try:
         with file_path.open('rb') as f:
             chunk = f.read(READ_CHUNK_SIZE)
+            # Check if a null byte exists in the chunk read
+            # Empty files are considered not binary by this check
             return b'\0' in chunk
+    except FileNotFoundError:
+        print(f"Warning: File not found {file_path}", file=sys.stderr)
+        return True # Treat as non-text if it disappeared or never existed
+    except IsADirectoryError:
+        print(f"Warning: Path is a directory, not a file {file_path}", file=sys.stderr)
+        return True # Directories are not text files
+    except PermissionError:
+        print(f"Warning: Permission denied reading {file_path}", file=sys.stderr)
+        return True # Treat as non-text if we can't read it
     except OSError as e:
+        # Catch other potential OS-level errors during open/read
         print(f"Warning: Could not read {file_path} to check for binary content: {e}", file=sys.stderr)
-        return True # Treat as binary if we can't read it properly
+        return True # Treat as non-text if we can't read it properly
     except Exception as e:
+        # Catch any other unexpected errors
         print(f"Warning: Unexpected error checking binary status of {file_path}: {e}", file=sys.stderr)
-        return True
+        return True # Default to treating as non-text on unexpected errors
+    
 
 def should_ignore(file_path: Path, root_dir: Path, pattern: str) -> bool:
     """
@@ -77,8 +196,8 @@ def should_ignore(file_path: Path, root_dir: Path, pattern: str) -> bool:
          return True
 
     # 4. Check for binary content (can be slow, do last)
-    if is_likely_binary(file_path):
-        logging.info("Skipping likely binary file: {relative_path_str}", file=sys.stderr)
+    if is_likely_non_text(file_path):
+        logging.info("Skipping likely non text file: {relative_path_str}", file=sys.stderr)
         return True
 
     return False # If none of the ignore conditions match
@@ -208,7 +327,7 @@ def main():
     if sys.stdout.isatty():
         # Output is to a terminal, write to default file
         output_filename = DEFAULT_OUTPUT_FILENAME
-        print(f"Outputting to file: {output_filename}", file=sys.stderr)
+        print(f"Outputting to file: {os.path.abspath(output_filename)}", file=sys.stderr)
         try:
             output_target = open(output_filename, 'w', encoding='utf-8')
         except OSError as e:
@@ -221,11 +340,14 @@ def main():
         using_stdout = True
 
     # --- Writing Output ---
+    total_tokens = 0
     try:
         file_count = 0
         for relative_path, content in results:
-            output_target.write(f">>>> {relative_path}\n")
+            file_info = f">>>> {relative_path}\n"
+            output_target.write(file_info)
             output_target.write(content)
+            total_tokens += count_tokens(file_info) + count_tokens(content)
             # Add a newline if content doesn't end with one for better separation
             if content and not content.endswith('\n'):
                  output_target.write('\n')
@@ -243,6 +365,8 @@ def main():
             output_target.close()
 
     print(f"\nSuccessfully combined content of {file_count} files.", file=sys.stderr)
+    if total_tokens > 0:
+        print(f"Total tokens (approximate): {total_tokens:,}", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
