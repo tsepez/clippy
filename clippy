@@ -742,6 +742,12 @@ def main() -> None:
         # Don't let the update check crash the main script
         warn_print(f"Update check failed with unexpected error: {e}")
 
+    # --- Pre-process args: Default to 'ask' command ---
+    known_commands = {'set_model', 'ask', 'list', 'ls', 'set_default', 'remove_model', 'rm'}
+    # Check if the first argument is present, isn't a known command, and isn't an option (like -h or --help)
+    if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith('-'):
+        sys.argv.insert(1, 'ask')
+
 
     # --- Parse arguments ---
     args = parser.parse_args()

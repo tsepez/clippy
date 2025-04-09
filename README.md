@@ -75,8 +75,9 @@ Model 'gpt-4o' set as default.
 $ clippy ls
 
 Configured Models:
-  gpt-4o
 * gemini-2.5-pro-exp-03-25
+  gpt-4o
+
 
 * indicates default model
 
@@ -87,8 +88,8 @@ AI Response:
 
 The capital of France is **Paris**.
 
-$ clippy ask "Give me the commandline to list all the files in folder projects/ recursively. The command should show list the file names only and noth
-ing else"
+# ask is the default of clippy command so it's ok to just skip ask
+$ clippy "Give me the commandline to list all the files in folder projects/ recursively. The command should show list the file names only and nothing else"
 Sending prompt to model 'gemini-2.5-pro-exp-03-25'...
 
 AI Response:
@@ -97,7 +98,7 @@ AI Response:
 find projects/ -type f -print
 ```
 
-$ man ffmpeg | clippy ask "give me the ffmpeg commandline to shorten a video in half"
+$ man ffmpeg | clippy "give me the ffmpeg commandline to shorten a video in half"
 Sending prompt to model 'gemini-2.5-pro-exp-03-25'...
 
 AI Response:
@@ -111,7 +112,7 @@ You can use the [`pack`](pack) script in this folder to do the folllowing:
 
 ```bash
 $ git clone https://github.com/karpathy/cryptos
-$ pack cryptos/ | clippy ask "Give me a high level overview of this project"
+$ pack cryptos/ | clippy "Give me a high level overview of this project"
 Sending prompt to model 'gemini-2.5-pro-exp-03-25'...
 
 AI Response:
