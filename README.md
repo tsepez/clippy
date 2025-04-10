@@ -106,6 +106,17 @@ AI Response:
 ```bash
 ffmpeg -i input.mp4 -ss 0 -to $(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 input.mp4 | awk '{printf "%.3f\n", $1/2}') -c copy output.mp4
 ```
+
+$ git diff | clippy generate a commit message along with the git command to commit with that message
+Checking for script updates...
+Querying model 'gemini-2.5-pro-preview-03-25' (google)...
+
+AI Response:
+
+```bash
+git commit -m "feat: Make 'ask' the default command" -m "If the first argument isn't a recognized command or option, default to the 'ask' command. Updated README examples."
+```
+
 ````
 
 You can use the [`pack`](pack) script in this folder to do the folllowing:
