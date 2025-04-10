@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+
+import os
+import re
+import argparse
+import sys
+
+# ANSI color codes
+COLORS = {
+    'BLUE': '\033[94m',
+    'GREEN': '\033[92m',
+    'YELLOW': '\033[93m',
+    'RED': '\033[91m',
+    'BOLD': '\033[1m',
+    'ENDC': '\033[0m'
+}
+
+def get_preview(code_lines, max_lines=5, max_chars=100):
+    """Generates a preview of the code block."""
+    preview_lines = code_lines[:max_lines]
+    preview = "".join(preview_lines) # Use original lines with potential \n
+
+    # Truncate if preview exceeds max_chars
+    if len(preview) > max_chars:
+        preview = preview[:max_chars].rsplit('\n', 1)[0] # Try to cut at last newline within limit
+        preview += "\n..."
+    # Add ellipsis if truncated by lines but not chars
+    elif len(code_lines) > max_lines:
+         # Check if last preview line actually had a newline
+        if preview_lines and preview_lines[-1].endswith('\n'):
+             preview += "..."
+        else: # If last line didn't end with \n, add one before ellipsis
+             preview += "\n..."
+
+    # Handle case where preview is empty but there was content
+    if not preview and code_lines:
+        return "[Empty or very short code block]"
+    elif not code_lines:
+         return "[Empty code block]"
+
+    return f"\n{preview.strip()}\n" # Strip surrounding whitespace for cleaner output
+
+
+def prompt_and_save(code_content, code_lines):
+    """Displays preview, prompts user, and saves file if requested."""
+    preview = get_preview(code_lines)
+    print(f"\n{COLORS['BLUE']}--- Code block ---{COLORS['ENDC']}")
+    print(f"{COLORS['GREEN']}Preview:{COLORS['ENDC']}\n{preview}")
+
+    while True:
+        save_choice = input(f"{COLORS['YELLOW']}Do you want to save this code block to a file? (Y/N): {COLORS['ENDC']}").strip().lower()
+        if save_choice in ['y', 'n']:
+            break
+        print(f"{COLORS['RED']}Invalid input. Please enter 'Y' or 'N'.{COLORS['ENDC']}")
+
+    if save_choice == 'y':
+        current_dir = os.getcwd()
+        while True:
+            try:
+                filename_prompt = f"{COLORS['YELLOW']}Enter the desired file name (will be saved in '{current_dir}'): {COLORS['ENDC']}"
+                filename = input(filename_prompt).strip()
+
+                if not filename:
+                    print(f"{COLORS['RED']}Error: File name cannot be empty. Please try again.{COLORS['ENDC']}")
+                    continue
+
+                # Basic check for potentially problematic characters (optional)
+                # if re.search(r'[<>:"/\\|?*]', filename):
+                #      print("Error: Filename contains invalid characters.")
+                #      continue
+
+                # Construct full path relative to current directory
+                full_path = os.path.join(current_dir, filename)
+
+                # Check if it's trying to escape the current dir (optional basic check)
+                if os.path.dirname(os.path.abspath(full_path)) != os.path.abspath(current_dir):
+                     print(f"{COLORS['YELLOW']}Warning: Path seems to target outside the current directory ('{current_dir}').{COLORS['ENDC']}")
+                     confirm_path = input(f"{COLORS['YELLOW']}Save to '{os.path.abspath(full_path)}'? (Y/N): {COLORS['ENDC']}").strip().lower()
+                     if confirm_path != 'y':
+                         print(f"{COLORS['RED']}Save cancelled. Please enter a filename relative to the current directory.{COLORS['ENDC']}")
+                         continue # Ask for filename again
+
+                # Check for overwrite
+                if os.path.exists(full_path):
+                    overwrite = input(f"{COLORS['YELLOW']}File '{filename}' already exists. Overwrite? (Y/N): {COLORS['ENDC']}").strip().lower()
+                    if overwrite != 'y':
+                        print(f"{COLORS['RED']}Save cancelled. Please enter a different file name.{COLORS['ENDC']}")
+                        continue # Ask for filename again
+
+                # Write the file
+                with open(full_path, 'w', encoding='utf-8') as outfile:
+                    outfile.write(code_content)
+                print(f"{COLORS['GREEN']}Successfully saved code block to '{full_path}'{COLORS['ENDC']}")
+                break # Exit filename prompt loop
+
+            except OSError as e:
+                print(f"{COLORS['RED']}Error saving file '{filename}': {e}. Please try again.{COLORS['ENDC']}")
+            except KeyboardInterrupt:
+                print(f"\n{COLORS['RED']}Save operation cancelled by user.{COLORS['ENDC']}")
+                break
+            except Exception as e:
+                print(f"{COLORS['RED']}An unexpected error occurred: {e}. Please try again.{COLORS['ENDC']}")
+
+def parse_markdown_and_prompt(filepath):
+    """Parses the Markdown file and handles the interactive prompting."""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        print(f"{COLORS['RED']}Error: Input file not found: {filepath}{COLORS['ENDC']}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"{COLORS['RED']}Error reading file '{filepath}': {e}{COLORS['ENDC']}", file=sys.stderr)
+        sys.exit(1)
+
+    in_code_block = False
+    current_code_lines = []
+    non_code_buffer = []
+    # Regex to detect start of code block (optional language specifier ignored for detection)
+    # Allows optional whitespace after ``` and language name
+    start_marker_pattern = re.compile(r"^\s*```(\w*\s*)?$")
+    # Regex to detect end of code block
+    end_marker_pattern = re.compile(r"^\s*```\s*$")
+
+    print(f"{COLORS['BLUE']}Parsing Markdown file: {filepath}{COLORS['ENDC']}")
+    print(f"{COLORS['BLUE']}Code blocks will be saved relative to: {os.getcwd()}{COLORS['ENDC']}")
+
+    line_num = 0
+    for line in lines:
+        line_num += 1
+        line_stripped = line.strip()
+
+        if not in_code_block:
+            # Check if the line marks the start of a code block
+            if start_marker_pattern.match(line): # Match on original line to catch indentation
+                # --- Entering Code Block ---
+                # 1. Display any preceding non-code text
+                if non_code_buffer:
+                    print(f"\n{COLORS['BLUE']}--- Non-code block ---{COLORS['ENDC']}")
+                    print("".join(non_code_buffer).strip())
+                    non_code_buffer = [] # Reset buffer
+
+                # 2. Start accumulating code
+                in_code_block = True
+                current_code_lines = []
+                # Optionally capture language: match.group(1) if needed
+            else:
+                # --- Still in Non-code Block ---
+                non_code_buffer.append(line)
+        else: # Inside a code block
+            # Check if the line marks the end of a code block
+            if end_marker_pattern.match(line): # Match on original line
+                 # --- Exiting Code Block ---
+                in_code_block = False
+                code_content = "".join(current_code_lines)
+
+                # 3. Process the completed code block
+                try:
+                    prompt_and_save(code_content, current_code_lines)
+                except KeyboardInterrupt:
+                     print(f"\n{COLORS['RED']}Operation cancelled by user.{COLORS['ENDC']}")
+                     sys.exit(0)
+
+                current_code_lines = [] # Reset for next block
+
+            else:
+                # --- Still collecting code ---
+                current_code_lines.append(line) # Store original line with indentation/newlines
+
+    # --- After Loop ---
+    # Display any remaining non-code text at the end of the file
+    if non_code_buffer:
+        print(f"\n{COLORS['BLUE']}--- Non-code block ---{COLORS['ENDC']}")
+        print("".join(non_code_buffer).strip())
+
+    # Warn if the file ended while still inside a code block
+    if in_code_block:
+        print(f"\n{COLORS['RED']}--- Warning ---{COLORS['ENDC']}", file=sys.stderr)
+        print(f"{COLORS['RED']}File ended unexpectedly while still inside a code block (started near line {line_num - len(current_code_lines)}).{COLORS['ENDC']}", file=sys.stderr)
+        print(f"{COLORS['RED']}The last code block was not processed.{COLORS['ENDC']}", file=sys.stderr)
+        # Optionally show a preview of the incomplete block
+        # if current_code_lines:
+        #    preview = get_preview(current_code_lines)
+        #    print(f"Preview of incomplete block:\n{preview}", file=sys.stderr)
+
+    print(f"\n{COLORS['GREEN']}Parsing complete.{COLORS['ENDC']}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Parse Markdown (e.g., from LLM output) and interactively save identified code blocks to files.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Example usage:\n  python parse_llm_md.py output.md"
+    )
+    parser.add_argument(
+        "input_file",
+        help="Path to the Markdown file to parse."
+    )
+    args = parser.parse_args()
+
+    parse_markdown_and_prompt(args.input_file)
+
+if __name__ == "__main__":
+    main()
