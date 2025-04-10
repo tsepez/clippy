@@ -35,8 +35,9 @@ def color_text(text: str, color_code: str) -> str:
     """Applies ANSI color code to text, ensuring reset."""
     if not sys.stdout.isatty():
         return text
-    if platform.system() == "Windows":
-        pass # Allow colors, modern terminals often support them
+    # Assume modern terminals support ANSI colors on Windows too
+    # if platform.system() == "Windows":
+    #     return text # Disable colors on Windows if needed
     return f"{color_code}{text}\033[0m"
 
 RED = "\033[31m"
@@ -165,7 +166,7 @@ def _openai_parser(response: Dict[str, Any]) -> Optional[str]:
         choice = response.get("choices", [{}])[0]
         message = choice.get("message", {})
         content = message.get("content")
-        if content is None: content = choice.get("text")
+        if content is None: content = choice.get("text") # Added for compatibility with older/other OpenAI-like APIs
         return content
     except (IndexError, KeyError, AttributeError, TypeError) as e:
         raise ValueError(f"Could not parse API response structure: {e}. Response: {response}") from e
@@ -175,14 +176,16 @@ def _anthropic_headers(api_key: str) -> Dict[str, str]:
 
 def _anthropic_payload(model: str, messages: List[Dict[str, str]], max_tokens: Optional[int], temperature: float) -> Dict[str, Any]:
     system_prompt = next((msg["content"] for msg in messages if msg["role"] == "system"), None)
+    # Filter messages: start with user, alternate user/assistant
     user_messages = [msg for msg in messages if msg["role"] in ("user", "assistant")]
-    while user_messages and user_messages[0]["role"] == "assistant": user_messages.pop(0)
+    while user_messages and user_messages[0]["role"] == "assistant": user_messages.pop(0) # Ensure starts with user
     valid_messages = []
     last_role = None
     for msg in user_messages:
         if msg["role"] != last_role:
             valid_messages.append(msg)
             last_role = msg["role"]
+    # Handle edge case: only system prompt provided
     if not valid_messages and system_prompt:
         warn_print("Only system prompt provided; adding empty user message for Anthropic.")
         valid_messages.append({"role": "user", "content": "..."})
@@ -206,7 +209,7 @@ def _anthropic_parser(response: Dict[str, Any]) -> Optional[str]:
 # --- Provider Registry ---
 PROVIDER_TYPES = {
     "openai": ProviderConfig("https://api.openai.com/v1/chat/completions", _openai_headers, _openai_payload, _openai_parser),
-    "google": ProviderConfig("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", _openai_headers, _openai_payload, _openai_parser),
+    "google": ProviderConfig("https://generativelanguage.googleapis.com/v1beta/models", _openai_headers, _openai_payload, _openai_parser), # Corrected base URL and assuming OpenAI-compatible for now
     "anthropic": ProviderConfig("https://api.anthropic.com/v1/messages", _anthropic_headers, _anthropic_payload, _anthropic_parser),
 }
 MODEL_PREFIX_TO_PROVIDER = {"gpt-": "openai", "gemini-": "google", "claude-": "anthropic"}
@@ -352,7 +355,7 @@ def ask_ai(prompt: str, model_name: str, api_key: str, provider_type: str, syste
         parsed_response = provider.response_parser(response_data)
 
         # --- Logging Integration ---
-        if parsed_response is not None and config.get("log_enabled", False):
+        if parsed_response is not None and config.get("log_enabled", False): # Check config before logging
             save_log_entry(prompt, model_name, provider_type, parsed_response)
         # --- End Logging Integration ---
 
@@ -375,12 +378,14 @@ def format_terminal_output(text: str) -> str:
     import re # Keep import local to function
     for line in lines:
         stripped_line = line.strip()
+        # Handle code block fences
         if stripped_line.startswith("```"):
             in_code_block = not in_code_block
             formatted_lines.append(line) # Keep backticks
         elif in_code_block:
             formatted_lines.append(color_text(line, CYAN)) # Color code block content
         else:
+            # Apply bold formatting using **...**
             formatted_line = re.sub(r'\*\*(.*?)\*\*', lambda m: color_text(m.group(1), BOLD), line)
             formatted_lines.append(formatted_line)
     return "\n".join(formatted_lines)
@@ -439,8 +444,11 @@ def ask_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
 
     prompt = _assemble_prompt(args.prompt)
     if not prompt:
-        error_print("Prompt cannot be empty. Provide text as arguments or pipe via stdin.")
-        return False
+        # Allow empty prompt if stdin might be coming (though _assemble handles this)
+        # Let the AI handle an empty prompt if it gets that far
+        pass
+        # error_print("Prompt cannot be empty. Provide text as arguments or pipe via stdin.")
+        # return False
 
     system_prompt = get_default_system_prompt()
     # Pass config to ask_ai so it can check log_enabled status
@@ -452,7 +460,8 @@ def ask_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
         print(formatted_response)
         return True
     else:
-        return False # Error already printed by ask_ai
+        # Error already printed by ask_ai or sub-functions
+        return False # Indicate failure
 
 def list_models_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
     models = config.get('models', {})
@@ -505,9 +514,51 @@ def remove_model_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
 
 # --- Log Command Functions --- New Section ---
 
+def show_log_status_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
+    """Shows the log status, basic help, and latest entry details."""
+    info_print(f"\n{color_text('Log Command Status & Help:', BOLD)}")
+    info_print("Manages interaction logs stored in:", LOG_HISTORY_DIR)
+    info_print("\nSub-commands:")
+    info_print(f"  {color_text('on', CYAN)}      Enable logging (currently default)")
+    info_print(f"  {color_text('off', CYAN)}     Disable logging")
+    info_print(f"  {color_text('show [N]', CYAN)} Show the latest N log sessions (default N=1)")
+    info_print(f"  {color_text('clear [N]', CYAN)} Clear the oldest N logs, or keep latest N if N is negative")
+
+    log_enabled = config.get("log_enabled", True) # Assume enabled if not set
+    status_text = color_text("enabled", GREEN) if log_enabled else color_text("disabled", RED)
+    info_print(f"\nCurrent status: Logging is {status_text}.")
+
+    log_files = _get_sorted_log_files()
+    total_logs = len(log_files)
+
+    if total_logs == 0:
+        info_print("History: No log sessions found.")
+    else:
+        info_print(f"History: Contains {color_text(str(total_logs), CYAN)} log session(s).")
+        num_to_show = 3
+        latest_files = log_files[-num_to_show:]
+        latest_files.reverse() # Show newest first
+
+        if latest_files:
+            info_print(f"\nLatest {min(num_to_show, total_logs)} log session timestamp(s):")
+            for filepath in latest_files:
+                try:
+                    filename = os.path.basename(filepath)
+                    timestamp_str = filename.split('.')[0]
+                    ts = int(timestamp_str)
+                    dt_object = datetime.fromtimestamp(ts)
+                    formatted_time = dt_object.strftime('%a %b %d - %H:%M:%S %Y') # e.g., Wed Apr 09 - 18:00:58 2024
+                    info_print(f"  - {formatted_time}")
+                except (ValueError, IndexError):
+                    error_print(f"  - Could not parse timestamp from filename: {filename}")
+                except Exception as e:
+                     error_print(f"  - Error processing log file {filename}: {e}")
+
+    return True # This command always 'succeeds' in showing info
+
 def log_on_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
     """Enables logging."""
-    if config.get("log_enabled", False):
+    if config.get("log_enabled", False): # Check current state accurately
         info_print("Logging is already enabled.")
         return True
     config["log_enabled"] = True
@@ -549,6 +600,7 @@ def log_show_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
 
     info_print(f"Showing the latest {min(count, len(files_to_show))} log session(s):")
 
+    display_count = 0
     for i, filepath in enumerate(files_to_show):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
@@ -556,7 +608,7 @@ def log_show_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
 
             ts = log_data.get("timestamp", 0)
             dt_object = datetime.fromtimestamp(ts)
-            formatted_time = dt_object.strftime('%a %b %d - %H:%M:%S') # e.g., Wed Apr 09 - 18:00:58
+            formatted_time = dt_object.strftime('%a %b %d - %H:%M:%S %Y') # e.g., Wed Apr 09 - 18:00:58 2024
             model = log_data.get('model_name', 'N/A')
             provider = log_data.get('provider_type', 'N/A')
             prompt = log_data.get('prompt', '<empty>')
@@ -566,6 +618,7 @@ def log_show_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
             print(f"{color_text('Model:', BOLD)} '{color_text(model, CYAN)}' ({provider})")
             print(f"{color_text('Prompt:', BOLD)}\n{textwrap.indent(prompt, '  ')}")
             print(f"{color_text('Response:', BOLD)}\n{textwrap.indent(response.strip(), '  ')}")
+            display_count += 1
 
         except FileNotFoundError:
             error_print(f"Log file not found (might have been deleted): {os.path.basename(filepath)}")
@@ -574,7 +627,7 @@ def log_show_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
         except Exception as e:
             error_print(f"Error reading log file {os.path.basename(filepath)}: {e}")
 
-    return True
+    return display_count > 0 # Return True if at least one log was shown successfully
 
 def log_clear_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
     """Clears log entries."""
@@ -601,8 +654,8 @@ def log_clear_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
         num_to_delete = total_logs - keep_count
         files_to_delete = log_files[:num_to_delete]
         action_desc = f"{num_to_delete} log(s) (keeping {keep_count} latest)"
-    else: # count == 0, should not happen with default argparse setup, but handle defensively
-         error_print("Clear count cannot be zero.")
+    else: # count == 0
+         error_print("Clear count cannot be zero. Use positive N to clear oldest, negative N to keep latest.")
          return False
 
     if not files_to_delete:
@@ -650,7 +703,7 @@ def main() -> None:
 
     # --- ask command ---
     ask_parser = subparsers.add_parser('ask', help='Ask the AI (default command)', description='Sends prompt (args + stdin) to the AI.')
-    ask_parser.add_argument('prompt', nargs='*', help='Prompt text. Reads from stdin if piped and args are empty.')
+    ask_parser.add_argument('prompt', nargs='*', help='Prompt text. Reads from stdin if piped.')
     ask_parser.add_argument('--model', '-m', help='Model name to use (overrides default).')
     ask_parser.set_defaults(func=ask_cmd)
 
@@ -670,24 +723,28 @@ def main() -> None:
 
     # --- log command --- New Subparser Group ---
     log_parser = subparsers.add_parser('log', help='Manage interaction logs')
-    log_subparsers = log_parser.add_subparsers(title='Log Actions', dest='log_action', required=True)
+    # Make log_action optional: running 'clippy log' will show status/help
+    log_subparsers = log_parser.add_subparsers(title='Log Actions', dest='log_action', required=False)
+
+    # Add placeholder default function for 'log' command itself
+    log_parser.set_defaults(func=show_log_status_cmd) # Execute status cmd if no sub-command given
 
     log_on_parser = log_subparsers.add_parser('on', help='Enable logging (default)')
-    log_on_parser.set_defaults(func=log_on_cmd)
+    log_on_parser.set_defaults(func=log_on_cmd) # Overwrite func for this specific sub-command
 
     log_off_parser = log_subparsers.add_parser('off', help='Disable logging')
-    log_off_parser.set_defaults(func=log_off_cmd)
+    log_off_parser.set_defaults(func=log_off_cmd) # Overwrite func
 
     log_show_parser = log_subparsers.add_parser('show', help='Show latest N log sessions')
     log_show_parser.add_argument('count', type=int, nargs='?', default=1, help='Number of latest sessions to show (default: 1)')
-    log_show_parser.set_defaults(func=log_show_cmd)
+    log_show_parser.set_defaults(func=log_show_cmd) # Overwrite func
 
     log_clear_parser = log_subparsers.add_parser('clear', help='Clear log sessions')
     log_clear_parser.add_argument(
         'count', type=int, nargs='?', default=-10,
         help='Number of OLDEST logs to clear. Negative N means KEEP N LATEST (e.g., -10 keeps 10 latest). Default: -10'
     )
-    log_clear_parser.set_defaults(func=log_clear_cmd)
+    log_clear_parser.set_defaults(func=log_clear_cmd) # Overwrite func
 
 
     # --- Check for updates ---
@@ -697,8 +754,8 @@ def main() -> None:
     # --- Pre-process args: Default to 'ask' command ---
     argv = sys.argv[1:] # Get args excluding script name
     known_commands = {'set_model', 'ask', 'list', 'ls', 'set_default', 'remove_model', 'rm', 'log'}
+    # Default to 'ask' if no args, or first arg isn't a known command or option
     if not argv or (argv[0] not in known_commands and not argv[0].startswith('-')):
-         # If no args, or first arg isn't a known command or option, insert 'ask'
          sys.argv.insert(1, 'ask')
 
     # --- Parse arguments ---
@@ -708,13 +765,24 @@ def main() -> None:
     config = load_config()
 
     # --- Execute command ---
+    success = False # Default to failure
     if hasattr(args, 'func'):
+        # Handle the case where 'clippy log' is called with no subcommand
+        # args.func will be show_log_status_cmd if log_action is None
+        # Otherwise, it will be the specific log action function (on, off, show, clear)
         success = args.func(args, config)
     elif not args.command: # Handles case where only 'clippy' is run (after inserting 'ask')
-        args = parser.parse_args(['ask']) # Re-parse with 'ask' explicitly
-        success = args.func(args, config)
+        # Re-parse ensures args.func is set correctly for the default 'ask' command
+        args = parser.parse_args(['ask'] + args.prompt) # Include any prompt args captured initially
+        if hasattr(args, 'func'):
+             success = args.func(args, config)
+        else:
+             parser.print_help() # Should not happen if 'ask' is default
+             success = False
     else:
-        # Should not happen if default command logic is correct and subparsers are set up
+        # This case might occur if a command is recognized but no function is set
+        # (e.g., if 'log' was defined without subparsers or a default func)
+        # Or if an unknown command was somehow passed through pre-processing
         parser.print_help()
         success = False
 
