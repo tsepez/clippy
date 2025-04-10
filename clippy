@@ -455,9 +455,12 @@ def ask_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
     ai_response = ask_ai(prompt, model_name, api_key, provider_type, system_prompt=system_prompt, config=config)
 
     if ai_response is not None:
-        formatted_response = format_terminal_output(ai_response.strip())
-        print("\n" + color_text("AI Response:", BOLD) + "\n")
-        print(formatted_response)
+        if args.raw:
+            print(ai_response.strip())
+        else:
+            formatted_response = format_terminal_output(ai_response.strip())
+            print("\n" + color_text("AI Response:", BOLD) + "\n")
+            print(formatted_response)
         return True
     else:
         # Error already printed by ask_ai or sub-functions
@@ -705,6 +708,7 @@ def main() -> None:
     ask_parser = subparsers.add_parser('ask', help='Ask the AI (default command)', description='Sends prompt (args + stdin) to the AI.')
     ask_parser.add_argument('prompt', nargs='*', help='Prompt text. Reads from stdin if piped.')
     ask_parser.add_argument('--model', '-m', help='Model name to use (overrides default).')
+    ask_parser.add_argument('--raw', action='store_true', help='Output raw response without formatting.', default=False)
     ask_parser.set_defaults(func=ask_cmd)
 
     # --- list command ---
