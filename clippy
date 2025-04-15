@@ -351,9 +351,10 @@ def ask_gemini(prompt: str, model_name: str, api_key: str, system_prompt: str, c
     )
     return response.text
 
-def ask_ai(prompt: str, model_name: str, api_key: str, provider_type: str, system_prompt: str, config: Dict[str, Any]) -> Optional[str]:
+def ask_ai(prompt: str, model_name: str, api_key: str, provider_type: str, system_prompt: str, config: Dict[str, Any], raw: bool = False) -> Optional[str]:
     """Sends the prompt, returns the response, and logs if enabled."""
-    info_print(f"Querying model '{color_text(model_name, CYAN)}' ({provider_type})...")
+    if not raw: # Conditionally print info
+        info_print(f"Querying model '{color_text(model_name, CYAN)}' ({provider_type})...")
 
     provider = PROVIDER_TYPES.get(provider_type)
     if not provider:
@@ -472,8 +473,8 @@ def ask_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
         # return False
 
     system_prompt = get_default_system_prompt()
-    # Pass config to ask_ai so it can check log_enabled status
-    ai_response = ask_ai(prompt, model_name, api_key, provider_type, system_prompt=system_prompt, config=config)
+    # Pass config to ask_ai so it can check log_enabled status and raw flag
+    ai_response = ask_ai(prompt, model_name, api_key, provider_type, system_prompt=system_prompt, config=config, raw=args.raw)
 
     if ai_response is not None:
         if args.raw:
