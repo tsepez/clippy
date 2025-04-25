@@ -344,6 +344,8 @@ def main():
             # Example check (needs refinement with modified should_ignore):
             # Combine checks for file, not binary, and not already processed
             if not is_likely_non_text(p) and p not in processed_files:
+                if p.stat().st_size > 5*1024*1024: 
+                    print(f"Warning: very large file {p.name} ({p.stat().st_size} bytes)", file=sys.stderr)
                 files_to_process_tuples.append((p, cwd))
                 processed_files.add(p)
             else:
