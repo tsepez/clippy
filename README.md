@@ -119,10 +119,28 @@ git commit -m "feat: Make 'ask' the default command" -m "If the first argument i
 
 ````
 
-You can use the [`pack`](pack) script in this folder to do the folllowing:
+## Using the `pack` Script
+
+You can use the included [`pack`](pack) script to easily gather the content of multiple text files from a directory structure and pipe it directly into `clippy`. This is useful for providing broader context to the AI, such as asking questions about an entire codebase.
+
+The `pack` script:
+*   Recursively scans specified directories (or uses the current directory by default).
+*   Reads text files in parallel for faster processing.
+*   Skips hidden files/directories by default (like `.git`).
+*   Attempts to automatically skip binary files (images, executables, etc.) based on file extensions and content checking.
+*   Allows filtering files using include (`-i`) and exclude (`-e`) glob patterns.
+*   Skips files larger than a configurable size (`--max-file-size`, default 5MB).
+*   Outputs the combined content, prepending each file's content with `>>>> path/to/file.ext`.
+*   Can optionally output just the file paths (`--paths-only`).
+*   If `tiktoken` is installed, it will estimate the total token count.
+
+**Example:**
 
 ```bash
+# Clone a repository
 $ git clone https://github.com/karpathy/cryptos
+
+# Use 'pack' to combine its text files and ask clippy about it
 $ pack cryptos/ | clippy "Give me a high level overview of this project"
 Sending prompt to model 'gemini-2.5-pro-exp-03-25'...
 
