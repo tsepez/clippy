@@ -342,11 +342,10 @@ def main():
             # TODO: Modify should_ignore or add specific checks here
             # For now, let's assume we need a modified check
             # Example check (needs refinement with modified should_ignore):
-            # if not should_ignore_explicit(p, exclude_pattern):
-            if not is_likely_non_text(p): # Basic check for now
-                 if p not in processed_files:
-                    files_to_process_tuples.append((p, cwd))
-                    processed_files.add(p)
+            # Combine checks for file, not binary, and not already processed
+            if not is_likely_non_text(p) and p not in processed_files:
+                files_to_process_tuples.append((p, cwd))
+                processed_files.add(p)
             else:
                  print(f"Info: Ignoring explicitly provided non-text file: {path_str}", file=sys.stderr)
 
@@ -355,12 +354,10 @@ def main():
             try:
                 # Use rglob for recursion
                 for item in p.rglob('*'):
-                    if item.is_file():
-                        if item not in processed_files:
-                            # Use the directory being scanned (p) as the root for should_ignore
-                            if not should_ignore(item, p, include_pattern, exclude_pattern):
-                                files_to_process_tuples.append((item, p)) # Use dir 'p' as root
-                                processed_files.add(item)
+                    # Combine checks for file, not processed, and not ignored
+                    if item not in processed_files and not should_ignore(item, p, include_pattern, exclude_pattern):
+                        files_to_process_tuples.append((item, p)) # Use dir 'p' as root
+                        processed_files.add(item)
             except PermissionError as e:
                 print(f"Warning: Permission denied during scan of {p}: {e}", file=sys.stderr)
             except Exception as e:
