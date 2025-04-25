@@ -228,7 +228,7 @@ def read_file_content(file_path: Path, root_dir: Path) -> tuple[str, str] | None
          print(f"Warning: Unexpected error reading file {file_path}: {e}", file=sys.stderr)
          return None
 
-def read_files_parallel(files_to_process: list[Path], root_dir: Path, num_workers: int, paths_only: bool) -> list[tuple[str, str]]:
+def read_files_parallel(files_to_process: list[tuple[Path, Path]], num_workers: int, paths_only: bool) -> list[tuple[str, str]]:
     """
     Read files in parallel using a thread pool.
     Returns a list of tuples (relative_path_str, content).
@@ -237,13 +237,13 @@ def read_files_parallel(files_to_process: list[Path], root_dir: Path, num_worker
     if paths_only:
         # In paths-only mode, we don't need to read file contents
         results = []
-        for file_path in files_to_process:
+        for abs_path, root_dir in files_to_process:
             try:
-                relative_path = file_path.relative_to(root_dir)
+                relative_path = abs_path.relative_to(root_dir)
                 relative_path_str = str(relative_path)
                 results.append((relative_path_str, ""))
             except Exception as e:
-                print(f"Warning: Could not get relative path for {file_path}: {e}", file=sys.stderr)
+                print(f"Warning: Could not get relative path for {abs_path}: {e}", file=sys.stderr)
         return results
 
     # Normal mode - read file contents in parallel
@@ -251,14 +251,14 @@ def read_files_parallel(files_to_process: list[Path], root_dir: Path, num_worker
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
         # Submit tasks
         future_to_path = {
-            executor.submit(read_file_content, path, root_dir): path
-            for path in files_to_process
+            executor.submit(read_file_content, abs_path, root_dir): (abs_path, root_dir)
+            for abs_path, root_dir in files_to_process
         }
 
         # Collect results as they complete
         processed_count = 0
         for future in concurrent.futures.as_completed(future_to_path):
-            path = future_to_path[future]
+            abs_path, root_dir = future_to_path[future]
             try:
                 result = future.result()
                 if result:
@@ -267,7 +267,7 @@ def read_files_parallel(files_to_process: list[Path], root_dir: Path, num_worker
                 # Optional: Progress indicator
                 print(f"\rProcessed: {processed_count}/{len(files_to_process)}", end="", file=sys.stderr)
             except Exception as e:
-                print(f"\nError processing file {path}: {e}", file=sys.stderr)
+                print(f"\nError processing file {abs_path}: {e}", file=sys.stderr)
 
     return results
 
@@ -275,14 +275,15 @@ def read_files_parallel(files_to_process: list[Path], root_dir: Path, num_worker
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Recursively combine content of text files in a directory.",
+        description="Recursively combine content of text files from specified files and directories.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument(
-        "directory",
-        nargs="?",
-        default=".",
-        help="The directory to scan recursively. Defaults to the current directory."
+        "paths",
+        nargs="*", # Accept zero or more arguments
+        default=["."], # Default to current directory if no paths are given
+        help="List of files and/or directories to process. If directories are provided, "
+             "they will be scanned recursively. Defaults to the current directory if none specified."
     )
     parser.add_argument(
         "-i", "--include",
@@ -310,54 +311,97 @@ def main():
 
     args = parser.parse_args()
 
-    root_dir = Path(args.directory).resolve() # Get absolute path
+    # Resolve input paths immediately
+    input_paths_str = args.paths
     include_pattern = args.include
     exclude_pattern = args.exclude
     num_workers = args.workers
 
-    if not root_dir.is_dir():
-        print(f"Error: Directory not found: {args.directory}", file=sys.stderr)
-        sys.exit(1)
+    cwd = Path('.').resolve()
+    files_to_process_tuples: list[tuple[Path, Path]] = [] # (absolute_path, root_for_relative_path)
+    processed_files: set[Path] = set() # Keep track of files added
 
-    print(f"Scanning directory: {root_dir}", file=sys.stderr)
+    print(f"Processing paths: {', '.join(input_paths_str)}", file=sys.stderr)
     print(f"Using include pattern: {include_pattern}", file=sys.stderr)
     print(f"Using exclude pattern: {exclude_pattern}", file=sys.stderr)
-    print(f"Ignoring hidden files/directories and binary files.", file=sys.stderr)
+    print(f"Ignoring hidden files/directories (within scanned dirs) and binary files.", file=sys.stderr)
 
-    # --- File Discovery ---
-    # Use rglob which handles recursion naturally.
-    # We collect all potential paths first.
-    all_files = []
-    try:
-        # Using generator directly is fine here as filtering happens next
-        file_iterator = root_dir.rglob('*')
-        all_files = list(file_iterator)
-    except PermissionError as e:
-         print(f"Warning: Permission denied during directory scan: {e}", file=sys.stderr)
-         # Continue with files found so far
-    except Exception as e:
-         print(f"Error during directory scan: {e}", file=sys.stderr)
-         sys.exit(1)
+    for path_str in input_paths_str:
+        p = Path(path_str).resolve()
 
+        if not p.exists():
+            print(f"Warning: Input path not found: {path_str}", file=sys.stderr)
+            continue
 
-    # --- Filtering ---
-    print(f"Found {len(all_files)} potential items. Filtering...", file=sys.stderr)
-    files_to_process = []
-    for file_path in all_files:
-        if not should_ignore(file_path, root_dir, include_pattern, exclude_pattern):
-            files_to_process.append(file_path)
+        if p in processed_files:
+             # Avoid processing the same resolved path twice if listed multiple times
+             continue
 
-    # Sort files for consistent output order
-    files_to_process.sort()
+        if p.is_file():
+            # Check if file should be ignored (using simpler rules for explicit files)
+            # TODO: Modify should_ignore or add specific checks here
+            # For now, let's assume we need a modified check
+            # Example check (needs refinement with modified should_ignore):
+            # if not should_ignore_explicit(p, exclude_pattern):
+            if not is_likely_non_text(p): # Basic check for now
+                 if p not in processed_files:
+                    files_to_process_tuples.append((p, cwd))
+                    processed_files.add(p)
+            else:
+                 print(f"Info: Ignoring explicitly provided non-text file: {path_str}", file=sys.stderr)
 
-    print(f"Processing {len(files_to_process)} files...", file=sys.stderr)
+        elif p.is_dir():
+            print(f"Scanning directory: {p}", file=sys.stderr)
+            try:
+                # Use rglob for recursion
+                for item in p.rglob('*'):
+                    if item.is_file():
+                        if item not in processed_files:
+                            # Use the directory being scanned (p) as the root for should_ignore
+                            if not should_ignore(item, p, include_pattern, exclude_pattern):
+                                files_to_process_tuples.append((item, p)) # Use dir 'p' as root
+                                processed_files.add(item)
+            except PermissionError as e:
+                print(f"Warning: Permission denied during scan of {p}: {e}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error during scan of {p}: {e}", file=sys.stderr)
+                # Decide if we should exit or just continue
+                # continue # Continue with next path for now
+        else:
+             print(f"Warning: Input path is neither a file nor a directory: {path_str}", file=sys.stderr)
 
-    # --- Parallel Reading ---
-    results = read_files_parallel(files_to_process, root_dir, num_workers, args.paths_only)
+    # --- Filtering & Sorting (Preparation) ---
+    print(f"Found {len(files_to_process_tuples)} potential files. Preparing list...", file=sys.stderr)
+
+    # Calculate relative paths and prepare for sorting
+    files_to_sort = []
+    for abs_path, root_for_rel in files_to_process_tuples:
+        try:
+            rel_path_str = str(abs_path.relative_to(root_for_rel))
+            files_to_sort.append((rel_path_str, abs_path, root_for_rel))
+        except ValueError:
+             print(f"Warning: Could not compute relative path for {abs_path} based on {root_for_rel}. Using absolute path.", file=sys.stderr)
+             # Fallback: Use absolute path string or just filename for sorting
+             files_to_sort.append((abs_path.name, abs_path, root_for_rel))
+
+    # Sort files based on the calculated relative path string
+    files_to_sort.sort(key=lambda item: item[0])
+
+    # Reconstruct the list of tuples in the sorted order for reading
+    sorted_files_info = [(abs_path, root_for_rel) for rel_path_str, abs_path, root_for_rel in files_to_sort]
+
+    print(f"Processing {len(sorted_files_info)} files...", file=sys.stderr)
+
+    # --- Parallel Reading (Needs updated function call) ---
+    # results = read_files_parallel(files_to_process, root_dir, num_workers, args.paths_only)
+    # Placeholder for the updated call:
+    results = read_files_parallel(sorted_files_info, num_workers, args.paths_only)
     print("\nReading complete.", file=sys.stderr) # Newline after progress indicator
 
-    # --- Sort results by relative path (important as futures may complete out of order) ---
-    results.sort(key=lambda item: item[0]) # Sort by relative_path_str
+    # --- Sort results by relative path (already done conceptually, but results format might change) ---
+    # The results from read_files_parallel should already contain the correct relative paths
+    # Let's ensure the sorting of the final results list remains
+    results.sort(key=lambda item: item[0]) # Sort by relative_path_str returned by read_file_content
 
     # --- Determine Output Destination ---
     output_target = None
