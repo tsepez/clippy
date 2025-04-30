@@ -375,12 +375,6 @@ def ask_ai(prompt: str, model_name: str, api_key: str, provider_type: str, syste
         payload = provider.payload_factory(model_name, messages, None, 0.7)
         response_data = client.make_request(provider.base_url, headers, payload)
         parsed_response = provider.response_parser(response_data)
-
-        # --- Logging Integration ---
-        if parsed_response is not None and config["log_enabled"] == True: # Check config before logging
-            save_log_entry(prompt, model_name, provider_type, parsed_response)
-        # --- End Logging Integration ---
-
         return parsed_response
 
     except (ValueError, ConnectionError, TimeoutError, RuntimeError) as e:
@@ -473,8 +467,11 @@ def ask_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
         # return False
 
     system_prompt = get_default_system_prompt()
-    # Pass config to ask_ai so it can check log_enabled status and raw flag
+    # Pass config to ask_ai so it can check and raw flag
     ai_response = ask_ai(prompt, model_name, api_key, provider_type, system_prompt=system_prompt, config=config, raw=args.raw)
+
+    if config["log_enabled"] == True:
+        save_log_entry(prompt, model_name, provider_type, ai_response)
 
     if ai_response is not None:
         if args.raw:
