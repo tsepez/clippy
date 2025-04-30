@@ -377,7 +377,7 @@ def ask_ai(prompt: str, model_name: str, api_key: str, provider_type: str, syste
         parsed_response = provider.response_parser(response_data)
 
         # --- Logging Integration ---
-        if parsed_response is not None and config.get("log_enabled", False): # Check config before logging
+        if parsed_response is not None and config["log_enabled"] == True: # Check config before logging
             save_log_entry(prompt, model_name, provider_type, parsed_response)
         # --- End Logging Integration ---
 
@@ -583,12 +583,9 @@ def show_log_status_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> boo
 
 def log_on_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
     """Enables logging."""
-    if config.get("log_enabled", False): # Check current state accurately
-        info_print("Logging is already enabled.")
-        return True
     config["log_enabled"] = True
     if save_config(config):
-        success_print("Logging enabled.")
+        success_print("Logging is enabled.")
         return True
     else:
         error_print("Failed to update config to enable logging.")
@@ -596,12 +593,9 @@ def log_on_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
 
 def log_off_cmd(args: argparse.Namespace, config: Dict[str, Any]) -> bool:
     """Disables logging."""
-    if not config.get("log_enabled", True): # Default to True if key missing for check
-        info_print("Logging is already disabled.")
-        return True
     config["log_enabled"] = False
     if save_config(config):
-        success_print("Logging disabled.")
+        success_print("Logging is disabled.")
         return True
     else:
         error_print("Failed to update config to disable logging.")
