@@ -186,7 +186,7 @@ def is_likely_non_text(file_path: Path) -> bool:
         # Catch any other unexpected errors
         print(f"Warning: Unexpected error checking binary status of {file_path}: {e}", file=sys.stderr)
         return True # Default to treating as non-text on unexpected errors
-    
+
 
 def should_ignore(file_path: Path, root_dir: Path, include_pattern: str, exclude_pattern: str, max_file_size_bytes: int) -> bool:
     """
@@ -227,7 +227,7 @@ def should_ignore(file_path: Path, root_dir: Path, include_pattern: str, exclude
     # First check exclude pattern (if specified)
     if exclude_pattern and (fnmatch.fnmatch(relative_path_str, exclude_pattern) or fnmatch.fnmatch(file_path.name, exclude_pattern)):
         return True
-    
+
     # Then check include pattern
     if include_pattern != '*' and not fnmatch.fnmatch(relative_path_str, include_pattern) and not fnmatch.fnmatch(file_path.name, include_pattern):
         return True
@@ -492,6 +492,7 @@ def main():
             file_info = f">>>> {relative_path}\n"
             output_target.write(file_info)
             output_target.write(content)
+            output_target.write('\n')
             total_tokens += count_tokens(file_info) + count_tokens(content)
             output_target.flush() # Flush periodically for long outputs
             file_count += 1
