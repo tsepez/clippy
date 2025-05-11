@@ -18,8 +18,6 @@
 
 ### Installation
 
-## Installation
-
 1.  **Download the `clippy` script:**
    -   Just clone this git repo:
 
