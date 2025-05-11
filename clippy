@@ -780,7 +780,8 @@ def main() -> None:
 
     # --- Load config ---
     config = load_config()
-
+    if not config.get('models'):
+        error_print("No models with API KEY configured. Note: Google P&D engineers can check out go/pd-ai-key")
     # --- Execute command ---
     success = False # Default to failure
     if hasattr(args, 'func'):
