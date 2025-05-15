@@ -1,2 +1,2 @@
 @echo off
-python "%~dp0pack" %*
+python "%~dp0pack.py" %*
