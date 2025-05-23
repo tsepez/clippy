@@ -52,10 +52,11 @@
 
 ### Configuration
 
-Before you can start asking questions, you need to configure Clippy with your desired AI model and API key. Use the `set_model` command:
+Before you can start asking questions, you need to configure Clippy with your desired AI model and API key. Use the `set_model` command, e.g:
 
 ```bash
-clippy set_model <model_name>:<your_api_key>
+clippy set_model gemini-2.5-pro-preview-05-06:<your_gemini_api_key>
+clippy set_model gemini-2.5-flash-preview-05-20:<your_gemini_api_key>
 ```
 
 
@@ -105,7 +106,7 @@ AI Response:
 ffmpeg -i input.mp4 -ss 0 -to $(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 input.mp4 | awk '{printf "%.3f\n", $1/2}') -c copy output.mp4
 ```
 
-$ git diff | clippy generate a commit message along with the git command to commit with that message
+$ git diff | clippy  generate git commit message command
 Checking for script updates...
 Querying model 'gemini-2.5-pro-preview-03-25' (google)...
 
