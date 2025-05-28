@@ -11,7 +11,7 @@ if [[ ! -d "${VENV}" ]]; then
   python3 -m venv "${VENV}"
   source "${VENV}/bin/activate"
   echo "Installing dependencies into virtualenv"
-  pip install -r "${DIRNAME}/requirements.txt"
+  ${VENV}/bin/python -m pip install -r "${DIRNAME}/requirements.txt"
 fi
 
 exec "${VENV}/bin/python3" "${DIRNAME}/${BASENAME}.py" "$@"
