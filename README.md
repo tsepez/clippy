@@ -63,9 +63,9 @@ clippy set_model gemini-2.5-flash-preview-05-20:<your_gemini_api_key>
 ### Examples
 
 ````bash
-$ clippy set_model gemini-2.5-pro-exp-03-25:<gemini-api-key> --default
-Model 'gemini-2.5-pro-exp-03-25' set successfully.
-Model 'gemini-2.5-pro-exp-03-25' set as default.
+$ clippy set_model gemini-2.5-pro-preview-05-06:<gemini-api-key> --default
+Model 'gemini-2.5-pro-preview-05-06' set successfully.
+Model 'gemini-2.5-pro-preview-05-06' set as default.
 
 $ clippy set_model gpt-4o:<openai-api-key>
 Model 'gpt-4o' set successfully.
@@ -74,14 +74,14 @@ Model 'gpt-4o' set as default.
 $ clippy ls
 
 Configured Models:
-* gemini-2.5-pro-exp-03-25
+* gemini-2.5-pro-preview-05-06
   gpt-4o
 
 
 * indicates default model
 
 $ clippy ask "what is the capital of France?"
-Sending prompt to model 'gemini-2.5-pro-exp-03-25'...
+Sending prompt to model 'gemini-2.5-pro-preview-05-06'...
 
 AI Response:
 
@@ -89,7 +89,7 @@ The capital of France is **Paris**.
 
 # ask is the default of clippy command so it's ok to just skip ask
 $ clippy "Give me the commandline to list all the files in folder projects/ recursively. The command should show list the file names only and nothing else"
-Sending prompt to model 'gemini-2.5-pro-exp-03-25'...
+Sending prompt to model 'gemini-2.5-pro-preview-05-06'...
 
 AI Response:
 
@@ -98,7 +98,7 @@ find projects/ -type f -print
 ```
 
 $ man ffmpeg | clippy "give me the ffmpeg commandline to shorten a video in half"
-Sending prompt to model 'gemini-2.5-pro-exp-03-25'...
+Sending prompt to model 'gemini-2.5-pro-preview-05-06'...
 
 AI Response:
 
@@ -141,7 +141,7 @@ $ git clone https://github.com/karpathy/cryptos
 
 # Use 'pack' to combine its text files and ask clippy about it
 $ pack cryptos/ | clippy "Give me a high level overview of this project"
-Sending prompt to model 'gemini-2.5-pro-exp-03-25'...
+Sending prompt to model 'gemini-2.5-pro-preview-05-06'...
 
 AI Response:
 
