@@ -15,12 +15,18 @@ from typing import Dict, List, Any, Optional, Tuple, Callable
 try:
     import requests
 except ImportError:
-    _REQUIREMENT_PATH = os.path.abspath(os.path.join(
-        os.path.dirname(__file__), 'requirements.txt'))
+    _CLIPPY_DIR = os.path.dirname(__file__)
+    _REQUIREMENT_PATH = os.path.abspath(
+        os.path.join(_CLIPPY_DIR, 'requirements.txt'))
+    _VENV_PATH = os.path.abspath(
+        os.path.join(_CLIPPY_DIR, 'venv'))
     command = sys.executable + " -m pip install -r " + _REQUIREMENT_PATH
+    clean_command = "rm -rf " + _VENV_PATH
     print(
         "Error: The 'requests' library is required but not found.",
-        "Please install it: " + command,
+        "Please install it: `" + command + "`\n",
+        ("If the issue persists still, run: `" + clean_command +
+         "` then run clippy again"),
         file=sys.stderr,
     )
     sys.exit(1)
