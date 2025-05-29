@@ -15,9 +15,12 @@ from typing import Dict, List, Any, Optional, Tuple, Callable
 try:
     import requests
 except ImportError:
+    _REQUIREMENT_PATH = os.path.abspath(os.path.join(
+        os.path.dirname(__file__), 'requirements.txt'))
+    command = sys.executable + " -m pip install -r " + _REQUIREMENT_PATH
     print(
         "Error: The 'requests' library is required but not found.",
-        "Please install it: python -m pip install requests",
+        "Please install it: " + command,
         file=sys.stderr,
     )
     sys.exit(1)
