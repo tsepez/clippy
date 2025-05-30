@@ -25,8 +25,7 @@ except ImportError:
     print(
         "Error: The 'requests' library is required but not found.",
         "To address this issue, run: `" + clean_command +
-        "` then run clippy command again"),
-        file=sys.stderr,
+        "` then run clippy command again", file=sys.stderr,
     )
     sys.exit(1)
 
