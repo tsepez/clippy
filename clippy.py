@@ -24,9 +24,8 @@ except ImportError:
     clean_command = "rm -rf " + _VENV_PATH
     print(
         "Error: The 'requests' library is required but not found.",
-        "Please install it: `" + command + "`\n",
-        ("If the issue persists still, run: `" + clean_command +
-         "` then run clippy again"),
+        "To address this issue, run: `" + clean_command +
+        "` then run clippy command again"),
         file=sys.stderr,
     )
     sys.exit(1)
