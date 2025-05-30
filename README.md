@@ -50,6 +50,8 @@
     5.  Click "**OK**" on all open windows.
     6.  **Restart your terminal** for the changes to take effect.
 
+> **Note:** The `run_script.sh` wrapper automatically handles Python dependency installation. When you first run the script, it will create a virtual environment and install all required packages from `requirements.txt`. You don't need to manually install any dependencies.
+
 ### Configuration
 
 Before you can start asking questions, you need to configure Clippy with your desired AI model and API key. Use the `set_model` command, e.g:
