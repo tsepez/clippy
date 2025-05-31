@@ -8,19 +8,16 @@ import venv_manager
 
 def main():
     try:
-        # Determine the directory of this launcher script.
-        # The venv and requirements.txt will be relative to this directory.
-        launcher_script_dir = os.path.dirname(os.path.abspath(__file__))
-
         # Path to the actual pack.py application script
-        pack_py_target_script = os.path.join(launcher_script_dir, "pack.py")
+        pack_py_target_script = os.path.join(venv_manager.CLIPPY_DIR, "pack.py")
 
         if not os.path.isfile(pack_py_target_script):
             print(f"Error: The target script '{pack_py_target_script}' was not found.", file=sys.stderr)
             sys.exit(1)
 
         # Ensure the virtual environment is set up and get the Python executable from it
-        venv_python_executable = venv_manager.ensure_venv(launcher_script_dir)
+        venv_python_executable = venv_manager.ensure_venv(
+            venv_manager.CLIPPY_DIR)
 
         # Arguments to pass to pack.py (all arguments passed to this launcher)
         args_for_pack_py = sys.argv[1:]

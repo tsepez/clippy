@@ -4,6 +4,10 @@ import subprocess
 import sys
 import platform
 
+
+CLIPPY_DIR = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
+
+
 def _get_venv_python_executable(venv_path: str) -> str:
     """
     Determines the conventional path to the Python executable within a virtual environment.
@@ -19,7 +23,7 @@ def _get_venv_python_executable(venv_path: str) -> str:
             return py3_exe
         return os.path.join(venv_path, "bin", "python")
 
-def ensure_venv(project_dir: str) -> str:
+def ensure_venv(project_dir) -> str:
     """
     Ensures a virtual environment exists in the specified project_dir.
     If the venv directory ('venv') doesn't exist, it creates it using the
