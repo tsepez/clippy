@@ -500,7 +500,7 @@ def main():
             percentage = (file_count / total_files) * 100
             print(f"\rWriting: {percentage:.1f}%", end="", file=sys.stderr)
     except Exception as e:
-         print(f"\nError writing output: {e}", file=sys.stderr)
+         print(f"\nError writing output for {file_info}: {e}", file=sys.stderr)
          # Avoid traceback flood if stdout pipe is broken
          if isinstance(e, BrokenPipeError):
              sys.exit(0) # Exit cleanly if pipe is broken

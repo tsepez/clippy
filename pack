@@ -1,1 +1,57 @@
-run_script.sh
+#!/usr/bin/env python
+import os
+import sys
+import subprocess
+import platform
+
+import venv_manager
+
+def main():
+    try:
+        # Determine the directory of this launcher script.
+        # The venv and requirements.txt will be relative to this directory.
+        launcher_script_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Path to the actual pack.py application script
+        pack_py_target_script = os.path.join(launcher_script_dir, "pack.py")
+
+        if not os.path.isfile(pack_py_target_script):
+            print(f"Error: The target script '{pack_py_target_script}' was not found.", file=sys.stderr)
+            sys.exit(1)
+
+        # Ensure the virtual environment is set up and get the Python executable from it
+        venv_python_executable = venv_manager.ensure_venv(launcher_script_dir)
+
+        # Arguments to pass to pack.py (all arguments passed to this launcher)
+        args_for_pack_py = sys.argv[1:]
+
+        command = [venv_python_executable, pack_py_target_script] + args_for_pack_py
+
+        # Execute pack.py using the venv's Python.
+        # os.execv replaces the current process with the new one (mimics bash `exec`).
+        if platform.system() == "Windows":
+            # os.execv can be less straightforward on Windows for interpreted scripts.
+            # subprocess.run achieves a similar outcome by waiting for the process
+            # and then exiting with its return code.
+            process = subprocess.run(command, check=False) # check=False to allow pack.py to control exit code
+            sys.exit(process.returncode)
+        else:
+            os.execv(command[0], command)
+            # If os.execv returns, it means an error occurred (e.g., executable not found)
+            # This part is typically not reached on success.
+            print(f"Error: os.execv failed to execute '{command[0]}'.", file=sys.stderr)
+            sys.exit(127) # Typical exit code for command not found
+
+    except FileNotFoundError as e:
+        print(f"Error: A required file or executable was not found. {e}", file=sys.stderr)
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        # This handles errors from ensure_venv if check=True leads to an exception there.
+        print(f"An error occurred during setup or execution: {e}", file=sys.stderr)
+        sys.exit(e.returncode if e.returncode is not None else 1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
